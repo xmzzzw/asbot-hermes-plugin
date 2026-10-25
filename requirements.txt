@@ -1,0 +1,2 @@
+# Python >=3.10. Bridge and tests use only the standard library.
+# Hermes is supplied by the existing installation; no pip dependency is added.

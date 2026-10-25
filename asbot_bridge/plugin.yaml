@@ -1,0 +1,14 @@
+name: asbot-bridge
+version: 1.2.0
+description: Restricted AS-BOT Screenshot and economic calendar bridge for existing Weixin profiles
+provides_tools:
+  - asbot_screenshot_capture
+  - asbot_economic_query
+  - asbot_last_screenshot
+provides_hooks:
+  - pre_gateway_dispatch
+  - post_gateway_admission
+  - transform_llm_output
+  - pre_llm_call
+  - pre_tool_call
+  - on_session_end

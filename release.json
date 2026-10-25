@@ -1,0 +1,26 @@
+{
+  "schema": "as-bot.client-release/v1",
+  "client": "hermes",
+  "clientVersion": "1.0.0",
+  "sha": "4139961b643d8a494116a8c6756e3895366e8d5e",
+  "files": {
+    "asbot_bridge/__init__.py": "3ff60029fe305029116dfb1c8e5b437470f7cb42434c467b22cd110084d08e64",
+    "asbot_bridge/bridge.py": "92d6ca5c8f39a9b3953b68ad074ed5d8385125a4de5be1a80ebbd68bc57dfb43",
+    "asbot_bridge/direct.py": "79c09d81905f62031253c4a8e4d7b976f0d99338f2e48cb8009b447d8e5c58f1",
+    "asbot_bridge/native_send.py": "f112bf6b8b25edf1a6ad8c43f48ab6cc0beb59d28ce6cb6e4e9d0fcba34b1bd0",
+    "asbot_bridge/permissions.py": "f05ab1b9806afe7aeb430e0245d5b62133003985dbb9d036e0fbc90d02d702a0",
+    "asbot_bridge/private_io.py": "30d11281d9a402f8b1a167e76f9ad1d483b3fb74d976393ee64b6a95baffbe82",
+    "asbot_bridge/quote_store.py": "25f9e9c25611798c833f0ab3e7f8799e8de94b7b918476c8ab83608eee8785e0",
+    "asbot_bridge/references.py": "f900cdf31c2a825836e1ea10ea31f34f72e4d361e221eb5c4c55b52845254424",
+    "asbot_bridge/weixin_ingress.py": "dee48c4aadb038bf1b35204193a72707c69b21ca99c9ec12ac830295de765790",
+    "asbot_bridge/plugin.yaml": "7bac61b47704536bd3bc4241f80d3e52018b882361a806fb49bae6a71b331d00",
+    "bin/client.py": "0ad7ebc1616904b9b03a0f9ccccd2fbb9c894aea313437437e1727b4995f39e2",
+    "bin/client-profile.py": "9ee39b3fbc779e4aeaaa9a4bb4c63c752a44a73bee8159c766affb512c67fe7f",
+    "bin/install-package.py": "d76abaf73a14113e3aff0780c1230d6efc4c3a2b29604eab3e7e61b7533cabcb",
+    "CLIENT-README.md": "fd56e61c48de9502065d3de9bec2ae8ce4197d7cfcd7124e732fb29c63c6cc5e",
+    "AGENTS-client.md": "34cd0a9f65568eb239cb49468514b3d570860a47a1831417a5f1064d255584f3",
+    "requirements.txt": "bbb32c93bcb3bc3590d7c76f6d876175fcbe239884d13209e52f5dd1baa65576",
+    "README.md": "fd56e61c48de9502065d3de9bec2ae8ce4197d7cfcd7124e732fb29c63c6cc5e",
+    "AGENTS.md": "34cd0a9f65568eb239cb49468514b3d570860a47a1831417a5f1064d255584f3"
+  }
+}
