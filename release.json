@@ -1,8 +1,8 @@
 {
   "schema": "as-bot.client-release/v1",
   "client": "hermes",
-  "clientVersion": "1.3.0",
-  "sha": "01ba31ae0d5c0def8ef389a1b393e4bebaea6dd3",
+  "clientVersion": "1.3.1",
+  "sha": "9e8dca014a8e2c8daa9edfa5ac65cd3d67a7fb9f",
   "files": {
     "asbot_bridge/__init__.py": "e405af424c4133991aff221482bcb04152ed9359cb3babbb6b2cec774797f82b",
     "asbot_bridge/bridge.py": "19c1558659105ae85b0280795ddaefff23896878d952048b96d9d112d4e0b3fe",
@@ -14,16 +14,16 @@
     "asbot_bridge/quote_store.py": "25f9e9c25611798c833f0ab3e7f8799e8de94b7b918476c8ab83608eee8785e0",
     "asbot_bridge/references.py": "f900cdf31c2a825836e1ea10ea31f34f72e4d361e221eb5c4c55b52845254424",
     "asbot_bridge/weixin_ingress.py": "dee48c4aadb038bf1b35204193a72707c69b21ca99c9ec12ac830295de765790",
-    "asbot_bridge/plugin.yaml": "fa23420e2c2b8b7fc59f8c98a0e33fd1d2092034dee18329085cf24f24a4e533",
+    "asbot_bridge/plugin.yaml": "1239480b6d3ced2f73b031e90a9ed6af22514a66ed5904c5c4c6024264274b4d",
     "bin/plugin.py": "91b8eed02457c6dd9eeb6ac3d0a1779454dfb9f0720fa498624fe6fe64a09aa4",
-    "bin/client.py": "8fd644f83dd804572174f76e2ae9585aa4a97399b0d75049271a42efa586f5d0",
+    "bin/client.py": "1d253d9b000e7263a904579d957ec312f21d5b6dd4745150ca9ad38f664bf33f",
     "bin/client-profile.py": "163c6add19def618ba7da67de6f1716627f28df85f7297ed53fd68dceed04ead",
     "bin/install-package.py": "d76abaf73a14113e3aff0780c1230d6efc4c3a2b29604eab3e7e61b7533cabcb",
-    "CLIENT-README.md": "6be6997aa17e51e10b13550671032dddf1f1a376b75f6dbe549c816ff1477db6",
+    "CLIENT-README.md": "052d6ffc277e38568d8cc87a7317305f6b0821f1449aed39aee8f41d572780ff",
     "AGENTS-client.md": "2c049957d0797816d740f804c322d276abf0b835014ca32ce73dab6bc1afe0a4",
     "AGENT-INSTALL.md": "bbf53ca3e36de3ca1141a87ce701d5dc2e5caf38fc324d48ec0ca2483672c1c6",
     "requirements.txt": "bbb32c93bcb3bc3590d7c76f6d876175fcbe239884d13209e52f5dd1baa65576",
-    "README.md": "6be6997aa17e51e10b13550671032dddf1f1a376b75f6dbe549c816ff1477db6",
+    "README.md": "052d6ffc277e38568d8cc87a7317305f6b0821f1449aed39aee8f41d572780ff",
     "AGENTS.md": "2c049957d0797816d740f804c322d276abf0b835014ca32ce73dab6bc1afe0a4"
   }
 }

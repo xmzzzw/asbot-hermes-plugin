@@ -1,6 +1,6 @@
 # AS-BOT Hermes 插件
 
-给已有官方 Hermes Agent 增加 AS-BOT 截图与经济日历工具。公开仓库为 [xmzzzw/asbot-hermes-plugin](https://github.com/xmzzzw/asbot-hermes-plugin)，插件发行版为 `1.3.0`。这不是 Hermes 的分支、替代客户端或指定版本的 Hermes；安装器不会安装、升级、降级 Hermes，不改变模型、搜索、审批、微信登录或其他插件。`bin/plugin.py` 只是本插件的安装与认证助手；旧入口 `bin/client.py` 保留兼容。
+给已有官方 Hermes Agent 增加 AS-BOT 截图与经济日历工具。公开仓库为 [xmzzzw/asbot-hermes-plugin](https://github.com/xmzzzw/asbot-hermes-plugin)，插件发行版为 `1.3.1`。这不是 Hermes 的分支、替代客户端或指定版本的 Hermes；安装器不会安装、升级、降级 Hermes，不改变模型、搜索、审批、微信登录或其他插件。`bin/plugin.py` 只是本插件的安装与认证助手；旧入口 `bin/client.py` 保留兼容。
 
 固定发行版、完整源 SHA 和校验值都指 **AS-BOT 插件**，用于核对来源与恢复，与你的 Hermes 版本无关。基础接入按官方公开插件接口检测能力，不再比较微信适配器的源码指纹。未来 Hermes 若破坏公开接口仍可能需要插件适配；不能承诺任何未来版本永不受影响。
 
