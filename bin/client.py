@@ -28,14 +28,13 @@ import warnings
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from asbot_bridge.private_io import secure_file, secure_dir, secure_open, lock_exclusive
-from asbot_bridge.weixin_ingress import PROCESS_SHA256
 
 spec = importlib.util.spec_from_file_location('asbot_package_installer', ROOT/'bin/install-package.py')
 installer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(installer)
 CONNECT_ORIGIN = 'https://asbot-connect.zhouzhou.edu.kg'
 BUSINESS_ORIGIN = 'https://asbot.zhouzhou.edu.kg'
-CLIENT_VERSION = '1.0.0'
+CLIENT_VERSION = '1.3.0'
 PAIR_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 STATES = {'awaiting_owner', 'awaiting_identity', 'awaiting_eligibility', 'provisioning',
           'ready', 'active', 'uncertain', 'expired', 'revoked', 'denied'}
@@ -176,13 +175,15 @@ class ConnectTransport:
 
 
 def native_compatibility():
-    """Probe the existing Hermes Python without loading user plugins or changing it."""
+    """Probe public extension capabilities, never an exact Hermes source revision."""
     probe = r'''
-import contextlib, hashlib, importlib, importlib.metadata, inspect, io, json, textwrap
+import contextlib, importlib.metadata, io, json
 with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-    module = importlib.import_module('gateway.platforms.weixin')
-    matches = [c for c in vars(module).values() if inspect.isclass(c) and c.__module__ == module.__name__ and callable(getattr(c, '_process_message', None))]
-    compatible = any(hashlib.sha256(textwrap.dedent(inspect.getsource(c._process_message)).strip().encode()).hexdigest() == 'EXPECTED_DIGEST' and all(callable(getattr(c, k, None)) for k in ('_enqueue_text_event','_canonicalize','send')) for c in matches)
+    from hermes_cli.plugins import PluginContext, VALID_HOOKS
+    from gateway.session_context import get_session_env
+    compatible = (all(callable(getattr(PluginContext, k, None)) for k in ('get_config','register_tool','register_hook'))
+                  and {'post_gateway_admission','transform_llm_output'} <= set(VALID_HOOKS)
+                  and callable(get_session_env))
     version = 'unknown'
     for name in ('hermes-agent','hermes_agent'):
         try:
@@ -191,17 +192,30 @@ with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.St
         except importlib.metadata.PackageNotFoundError:
             pass
 print(json.dumps({'compatible': compatible, 'version': version}))
-'''.replace('EXPECTED_DIGEST', PROCESS_SHA256)
+'''
     try:
-        result = subprocess.run([sys.executable, '-c', probe], stdout=subprocess.PIPE,
+        result = subprocess.run([sys.executable, '-c', probe], cwd=hermes_python_source(), stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, timeout=20, check=False)
         value = json.loads(result.stdout) if result.returncode == 0 else {}
     except (OSError, subprocess.SubprocessError, ValueError):
         value = {}
     if value.get('compatible') is not True:
-        raise ClientError('HERMES_NATIVE_VERSION_UNSUPPORTED_USE_EXISTING_HERMES_PYTHON')
+        raise ClientError('HERMES_PLUGIN_API_UNAVAILABLE_USE_EXISTING_HERMES_PYTHON')
     version = value.get('version', 'unknown')
     return version if clean_text(version, 100) else 'unknown'
+
+
+def hermes_python_source():
+    """Official source installs keep the chosen Python venv under their checkout.
+
+    Resolve only from that interpreter, not the current directory or a download.
+    Packaged Python installs can import Hermes normally without a cwd override.
+    """
+    candidate = Path(sys.prefix).parent
+    if all((candidate/name).is_file() for name in ('pyproject.toml', 'hermes_cli/plugins.py',
+                                                   'gateway/session_context.py')):
+        return candidate
+    return None
 
 
 def choose(values, label, explicit=None):
@@ -284,7 +298,12 @@ def report(state, answer=None):
     answer = answer or {}
     result = {'stage': state.get('remoteState', 'local_setup').upper(), 'enrollmentId': state['enrollmentId'],
               'clientVersion': CLIENT_VERSION, 'qualified': False,
-              'nativeMedia': 'PENDING_REAL_RECEIPT', 'busyCommandLane': 'PENDING_REAL_TEST'}
+              'product': 'AS-BOT Hermes 插件',
+              'nativeMedia': 'PENDING_REAL_RECEIPT',
+              'transportMode': state.get('transportMode', 'legacy'),
+              'busyCommandLane': 'HERMES_NATIVE_POLICY',
+              'repeatedInboundCommands': 'HERMES_NATIVE_POLICY',
+              'oldImageRecovery': 'HERMES_NATIVE_POLICY'}
     if state.get('remoteState') in ('awaiting_owner', 'awaiting_identity') and not state.get('identityVerified'):
         result['identityCommand'] = '/接入确认 '+state['pairingCode']
         result['identityDeadlineAt'] = state.get('identityDeadlineAt')
@@ -357,6 +376,7 @@ def setup(directory, transport, *, hermes_root=None, profile=None, peer=None, de
                  'pairingCode': ''.join(secrets.choice(PAIR_ALPHABET) for _ in range(12)),
                  'hermesRoot': str(hermes), 'profile': selected, 'peer': selected_peer,
                  'deviceLabel': label, 'hermesVersion': version, 'platform': sys.platform,
+                 'transportMode': 'official',
                  'clientVersion': CLIENT_VERSION+'+'+manifest['sha'], 'created': False}
         save_state(directory, state)
     else:
@@ -416,6 +436,9 @@ def reload_existing_plugins(state):
     hermes=Path(state['hermesRoot'])
     home=hermes if state['profile']=='default' else hermes/'profiles'/state['profile']
     try:
+        source = hermes_python_source()
+        if source is not None and str(source) not in sys.path:
+            sys.path.insert(0, str(source))
         # Native diagnostic output may contain local private details.
         with contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):
             from gateway.control_socket import reload_gateway_plugins
@@ -428,6 +451,8 @@ def reload_existing_plugins(state):
 
 
 def activate(directory, state, transport, *, wait=0, auth='discord'):
+    if state.get('transportMode') != 'official':
+        raise ClientError('LEGACY_PLUGIN_MIGRATION_REQUIRED')
     native_compatibility()
     deadline = time.monotonic()+wait
     opened = False
@@ -553,6 +578,8 @@ def main(argv=None):
                     native_compatibility()
                     result = local_doctor(directory,state)
                 elif args.action == 'update':
+                    if state.get('transportMode') != 'official':
+                        raise ClientError('LEGACY_PLUGIN_MIGRATION_REQUIRED')
                     native_compatibility()
                     result = installer.update(ROOT,directory/'install-receipt.json',state.get('installationId'))
                     state['pluginReload']=reload_existing_plugins(state)

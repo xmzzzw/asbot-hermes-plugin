@@ -61,7 +61,7 @@ def merge_profile(config, profile, config_path, preserve_search=True):
     settings = entry.setdefault('settings', {})
     if not isinstance(settings, dict):
         raise ValueError('BRIDGE_PLUGIN_SETTINGS_INVALID')
-    settings.update({'profile': profile, 'config_path': str(config_path)})
+    settings.update({'profile': profile, 'config_path': str(config_path), 'transport_mode': 'official'})
     selections = result.setdefault('platform_toolsets', {})
     if not isinstance(selections, dict):
         raise ValueError('PLATFORM_TOOLSETS_INVALID')

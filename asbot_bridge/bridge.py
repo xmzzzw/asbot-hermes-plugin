@@ -97,7 +97,7 @@ def remember_media(identity, result):
             inbound["media"].append(path)
 
 
-def append_media(profile, response_text, config_path=None):
+def append_media(profile, response_text, config_path=None, *, remote_authorize=False):
     """Official final-output transform ensures generated artifacts reach the media parser.
 
     Only paths recorded by this bridge in the current admitted message may be appended;
@@ -106,16 +106,30 @@ def append_media(profile, response_text, config_path=None):
     identity = trusted_identity(profile)
     if not isinstance(response_text, str) or not response_text:
         return None
-    if config_path is not None:
+    paths = _INBOUND.get()["media"]
+    if remote_authorize and not paths:
+        return None
+    if config_path is not None or remote_authorize:
         try:
-            Bridge.from_file(config_path).principal(identity)
+            bridge = Bridge.from_file(config_path)
+            if remote_authorize:
+                bridge.authorize_delivery(identity)
+            else:
+                bridge.principal(identity)
         except Exception:
             # Even an assistant that copied the path before revocation must not send it.
-            for name in _INBOUND.get()["media"]:
-                response_text = response_text.replace("MEDIA:" + name, "").replace(name, "[图片授权已撤销]")
-            return response_text.rstrip() + "\n\n图片授权已撤销，未附加截图。"
+            for name in paths:
+                if remote_authorize:
+                    forms = {name, json.dumps(name), json.dumps(name, ensure_ascii=False)}
+                    for form in sorted(forms, key=len, reverse=True):
+                        response_text = re.sub(r"MEDIA:\s*" + re.escape(form), "", response_text, flags=re.I)
+                        response_text = response_text.replace(form, "[图片未交付]")
+                else:
+                    response_text = response_text.replace("MEDIA:" + name, "").replace(name, "[图片授权已撤销]")
+            message = "图片交付授权未通过，未附加截图。" if remote_authorize else "图片授权已撤销，未附加截图。"
+            return response_text.rstrip() + "\n\n" + message
     additions = []
-    for name in _INBOUND.get()["media"]:
+    for name in paths:
         path = Path(name)
         try:
             private_file(path)
