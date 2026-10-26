@@ -61,6 +61,13 @@ def handled(code, message):
     return {'action':'handled','reply':message+' ['+code+']'}
 
 
+def template_text(shortcut, description):
+    # Catalog text is plain display data, never a command, model prompt or path.
+    label = ' '.join(description.split())[:400] if isinstance(description,str) else ''
+    label = ''.join(c for c in label if ord(c)>=32 and ord(c)!=127)
+    return str(shortcut)+'、'+(label or 'BTC'+str(shortcut))
+
+
 class FastLane:
     def __init__(self,ctx,profile,config_path):
         self.ctx,self.profile,self.config_path=ctx,profile,config_path
@@ -84,6 +91,14 @@ class FastLane:
         if adapter is not self.adapter:self.epoch+=1
         self.adapter,self.loop=adapter,loop
         self.pending='READY'
+
+    def wire_catalog(self,native,adapter):
+        """Public binding for catalog-capable command handling.
+
+        Hermes' public rewire API can attach this newly added factory to the
+        existing connection. No private wired-factory set is modified.
+        """
+        self.wire(native,adapter)
 
     def close(self):
         # Unload may run on Hermes' discovery thread. Invalidate immediately;
@@ -113,7 +128,6 @@ class FastLane:
             bridge=Bridge.from_file(self.config_path,authorize_download=True)
             bridge.principal(item)
             action,args=command
-            if action=='help':return handled('COMMAND_HELP',HELP)
             if action=='invalid' or (action=='capture' and len(args)>5):
                 return handled('COMMAND_INVALID','请发送 0–9、BTC1 或 截图1；单条最多 5 项。')
             deliveries=Deliveries(bridge)
@@ -123,6 +137,13 @@ class FastLane:
             if self.adapter is None:return handled(self.pending,'尚未绑定本 Profile 的现有微信连接；请确认空闲后重启现有 Gateway 一次。')
             if self.loop is not asyncio.get_running_loop():raise BridgeError('PLATFORM_LOOP_UNAVAILABLE')
             if not bool(self.adapter.is_connected):raise BridgeError('PLATFORM_DISCONNECTED')
+            if action=='help':
+                coro=self._help(bridge,item,self.adapter,self.epoch)
+                try:task=self.ctx.spawn_task(coro,name='asbot-template-help')
+                except Exception:
+                    coro.close();raise BridgeError('TASK_NOT_STARTED') from None
+                self.tasks.add(task);task.add_done_callback(self.tasks.discard)
+                return handled('COMMAND_HELP','正在读取你可用的模板说明；不调用模型、不提交截图。')
             entries=[(item if len(args)==1 else replace(item,message_id='batch:'+hashlib.sha256(item.message_id.encode()).hexdigest()+':'+str(n)),shortcut)
                      for n,shortcut in enumerate(args)]
             keys=deliveries.claim_many(entries)
@@ -146,6 +167,40 @@ class FastLane:
                          'DIRECT_QUEUE_FULL':'截图队列已满，未提交新任务；请先核对已有任务。'}.get(code,'指令未获准或尚未就绪，未切换到模型；请保留原任务核对。'))
         except Exception:
             return handled('COMMAND_UNAVAILABLE','截图入口暂不可用，未切换到模型；请核对已有任务。')
+
+    async def _help(self,bridge,item,adapter,epoch):
+        # GET-only work stays outside the admission hook. The fixed authenticated
+        # API already filters this catalog to the person's permitted templates.
+        job={'identity':item,'bridge':bridge,'adapter':adapter,'epoch':epoch,'cancelled':False}
+        def read():
+            try:
+                catalog=bridge.service_get(item,'screenshot-templates')
+                rows=catalog.get('templates')
+                if not isinstance(rows,list):raise BridgeError('INVALID_API_RESPONSE')
+                lines=[];seen=set()
+                valid=[r for r in rows if isinstance(r,dict) and re.fullmatch(r'[0-9]',str(r.get('shortcut','')))]
+                for row in sorted(valid,key=lambda r:int(r['shortcut']))[:10]:
+                    if not isinstance(row,dict) or not re.fullmatch(r'[0-9]',str(row.get('shortcut',''))):continue
+                    shortcut=str(row['shortcut'])
+                    if shortcut in seen:continue
+                    seen.add(shortcut)
+                    lines.append(template_text(shortcut,row.get('description') or row.get('name'))+
+                                 ('（暂不可用）' if row.get('available') is False else ''))
+                bridge.authorize_delivery(item)
+                return HELP+'\n\n可用模板：\n'+('\n'.join(lines) or '当前没有可用模板。')
+            finally:
+                close=getattr(bridge.transport,'close',None)
+                if callable(close):close()
+        future=asyncio.get_running_loop().run_in_executor(None,copy_context().run,read)
+        future.add_done_callback(lambda done:None if done.cancelled() else done.exception())
+        try:
+            text=await asyncio.wait_for(asyncio.shield(future),15)
+            self._active(job)
+            await asyncio.wait_for(adapter.send(chat_id=item.chat_id,content=text),15)
+        except asyncio.CancelledError:raise
+        except Exception:
+            # No model fallback, no cached/other-person catalog, no retry send.
+            return
 
     def _active(self,job):
         self._same_profile()
@@ -273,7 +328,8 @@ class FastLane:
             await self._physical(job,lambda:bridge.authorize_delivery(entry,token))
             self._active(job);bridge.principal(entry,token)
             deliveries.update(key,'sending',image=str(image));job['sending']=True
-            response=await asyncio.wait_for(job['adapter'].send_image_file(chat_id=entry.chat_id,image_path=str(image),caption=None),
+            response=await asyncio.wait_for(job['adapter'].send_image_file(chat_id=entry.chat_id,image_path=str(image),
+                                            caption=template_text(job['shortcut'],result.get('label'))),
                                             min(SEND_SECONDS,self._remaining(job)))
             if response is not None and getattr(response,'success',False) is True:
                 deliveries.update(key,'sent')

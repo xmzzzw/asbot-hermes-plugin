@@ -34,7 +34,7 @@ def register(ctx):
         from .fastlane import FastLane
         fastlane=FastLane(ctx,profile,config_path)
         if fastlane.available:
-            ctx.register_platform_handler('weixin',fastlane.wire)
+            ctx.register_platform_handler('weixin',fastlane.wire_catalog)
             ctx.on_unload(fastlane.close)
 
     def admitted(source, message_id, session_key, platform, text="", **_metadata):

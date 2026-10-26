@@ -34,7 +34,7 @@ installer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(installer)
 CONNECT_ORIGIN = 'https://asbot-connect.zhouzhou.edu.kg'
 BUSINESS_ORIGIN = 'https://asbot.zhouzhou.edu.kg'
-CLIENT_VERSION = '1.4.0'
+CLIENT_VERSION = '1.4.1'
 PAIR_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 STATES = {'awaiting_owner', 'awaiting_identity', 'awaiting_eligibility', 'provisioning',
           'ready', 'active', 'uncertain', 'expired', 'revoked', 'denied'}
