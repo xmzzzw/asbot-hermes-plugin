@@ -1,9 +1,7 @@
 """Public Hermes admission binding for ordinary model-invoked plugin tools.
 
-This hook never submits capabilities or waits for screenshots. Hermes admission
-hooks fail open after their timeout; slow work here could submit a capture and
-then also fall through to a model turn. Numeric commands, busy bypass and private
-native reference repair are therefore unsupported in standard mode.
+Ordinary chat binds identity for model tools. Explicit commands are consumed by
+the separate public fastlane before this binding; no slow work runs in a hook.
 """
 import re
 from .bridge import Bridge, Identity, bind_inbound
@@ -38,7 +36,7 @@ def bind_admission(config_path, profile, source, message_id, session_key, platfo
 
 def support():
     return {"transportMode": "official", "tools": ["screenshot.capture", "economic.query"],
-            "numericCommands": "UNSUPPORTED", "busyBypass": "UNSUPPORTED",
+            "numericCommands": "ZERO_MODEL_AFTER_ADMISSION", "busyBypass": "UNSUPPORTED",
             "repeatedInbound": "HERMES_OWNED_NOT_GUARANTEED",
             "referenceRepair": "UNSUPPORTED", "nativeReceipt": "PENDING_REAL_RECEIPT",
             "qualified": False}

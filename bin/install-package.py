@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import sys
 import tempfile
 import uuid
@@ -34,6 +35,24 @@ def atomic(path, data):
         os.replace(temporary,path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def plugin_parent(path):
+    """The existing shared plugin catalog holds public code, not credentials.
+
+    Preserve its normal 0755 mode and other plugins; only our own child and
+    credential state require private permissions. Reject symlinks, foreign
+    ownership and writable-by-others catalogs before installing any code.
+    """
+    path = Path(path)
+    if os.name == 'nt':
+        private_dir(path)
+        return
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = path.lstat()
+    if (not path.is_absolute() or path.is_symlink() or not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != os.getuid() or info.st_mode & 0o022):
+        raise ValueError('UNSAFE_PLUGIN_DIRECTORY')
 
 
 def verify_payload(root):
@@ -122,7 +141,7 @@ def install(root, hermes, config_file, profiles, apply=False, *, installation_id
         for index,(home,path,before,after,plugin) in enumerate(plans):
             if path.read_bytes()!=before:raise ValueError('PROFILE_CHANGED')
             atomic(backup/(str(index)+'.yaml'),before)
-            private_dir(plugin.parent);private_dir(plugin)
+            plugin_parent(plugin.parent);private_dir(plugin)
             changed.append((path,before,plugin))
             # Copy regular files works on native Windows without symlink privilege.
             for name,data in bridge_payload(root,manifest).items():

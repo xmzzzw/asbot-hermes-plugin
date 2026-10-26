@@ -1,6 +1,6 @@
 name: asbot-bridge
-version: 1.3.1
-description: AS-BOT screenshot and economic calendar plugin using public Hermes admission and media APIs by default
+version: 1.4.0
+description: AS-BOT zero-model screenshot commands and economic calendar tools using public Hermes plugin APIs
 provides_tools:
   - asbot_screenshot_capture
   - asbot_economic_query

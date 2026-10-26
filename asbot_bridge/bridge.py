@@ -398,9 +398,10 @@ class Ledger:
 
 
 class Bridge:
-    def __init__(self, config, transport=None, wait_seconds=180):
+    def __init__(self, config, transport=None, wait_seconds=180, *, authorize_download=False):
         self.config = config
         self.config_path = None
+        self.authorize_download = authorize_download
         self.transport = transport or Transport(config["origin"], config["access"])
         self.ledger = Ledger(config["state_dir"])
         self.wait_seconds = max(wait_seconds, 360) if config.get("external_access") is True and wait_seconds == 180 else wait_seconds
@@ -424,14 +425,14 @@ class Bridge:
                     path.unlink()
 
     @classmethod
-    def from_file(cls, file):
+    def from_file(cls, file, *, authorize_download=False):
         path = Path(file)
         if not path.is_absolute():
             raise BridgeError("CONFIG_REQUIRED")
         private_file(path)
         try:
             config = validate_config(json.loads(path.read_text()))
-            instance = cls(config)
+            instance = cls(config, authorize_download=authorize_download)
             instance.config_path = path
             return instance
         except BridgeError:
@@ -603,6 +604,8 @@ class Bridge:
                     if body.get("resultUrl") != path + "/result":
                         raise BridgeError("INVALID_RESULT_URL")
                     self.principal(identity, token)
+                    if self.authorize_download:
+                        self.authorize_delivery(identity, token)
                     status, data = self.transport.request("GET", path + "/result", token, png=True)
                     self.principal(identity, token)
                     if status != 200:
@@ -631,6 +634,9 @@ class Bridge:
                     raise BridgeError("INVALID_OPERATION_STATE")
             except BridgeError as error:
                 if error.code == "CAPTURE_FAILED":
+                    raise
+                if self.authorize_download and error.code in ("EXTERNAL_ACCESS_DISABLED", "LOCAL_AUTHORIZATION_CHANGED",
+                                                              "PRINCIPAL_FORBIDDEN", "HTTP_401", "HTTP_403"):
                     raise
                 # GET is safe to retry, but authentication/revocation/expiry is terminal locally.
                 if error.code in ("HTTP_401", "HTTP_403", "HTTP_404", "HTTP_410", "PRINCIPAL_FORBIDDEN", "LOCAL_AUTHORIZATION_CHANGED", "INVALID_CONFIGURATION", "PRIVATE_FILE_REQUIRED"):

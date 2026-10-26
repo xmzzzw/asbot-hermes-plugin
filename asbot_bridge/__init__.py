@@ -31,12 +31,15 @@ def register(ctx):
             ctx.on_unload(permissions.close)
     else:
         from .standard import bind_admission, capture_status, safe_error
+        from .fastlane import FastLane
+        fastlane=FastLane(ctx,profile,config_path)
+        if fastlane.available:
+            ctx.register_platform_handler('weixin',fastlane.wire)
+            ctx.on_unload(fastlane.close)
 
     def admitted(source, message_id, session_key, platform, text="", **_metadata):
         # Official hook supplies authenticated MessageEvent metadata after admission;
         # Weixin currently leaves SessionSource.message_id empty.
-        if mode == "official":
-            return bind_admission(config_path, profile, source, message_id, session_key, platform)
         bind_inbound(profile, platform, source, message_id, session_key)
         if references is not None and platform == "weixin":
             try:
@@ -47,7 +50,17 @@ def register(ctx):
                 pass
         return accept(ctx, config_path, profile, source, message_id, session_key, platform, text)
 
-    ctx.register_hook("post_gateway_admission", admitted)
+    def official_admitted(source, message_id, session_key, platform, text="", **_metadata):
+        # Hermes ainvoke_hook runs sync callbacks inline. Keep this synchronous:
+        # an async callback bounded with wait_for would bind _INBOUND in a child
+        # task and lose ordinary-chat tool identity in the parent agent task.
+        # This callback only claims/enqueues and returns handled; the supervised
+        # task later sends through its independently factory-bound public adapter.
+        result=fastlane.accept(source,message_id,session_key,platform,text)
+        if result is not None:return result
+        return bind_admission(config_path, profile, source, message_id, session_key, platform)
+
+    ctx.register_hook("post_gateway_admission", official_admitted if mode == "official" else admitted)
 
     def deliver(response_text, **_metadata):
         try:

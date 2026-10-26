@@ -34,7 +34,7 @@ installer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(installer)
 CONNECT_ORIGIN = 'https://asbot-connect.zhouzhou.edu.kg'
 BUSINESS_ORIGIN = 'https://asbot.zhouzhou.edu.kg'
-CLIENT_VERSION = '1.3.1'
+CLIENT_VERSION = '1.4.0'
 PAIR_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 STATES = {'awaiting_owner', 'awaiting_identity', 'awaiting_eligibility', 'provisioning',
           'ready', 'active', 'uncertain', 'expired', 'revoked', 'denied'}
@@ -181,7 +181,7 @@ import contextlib, importlib.metadata, io, json
 with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
     from hermes_cli.plugins import PluginContext, VALID_HOOKS
     from gateway.session_context import get_session_env
-    compatible = (all(callable(getattr(PluginContext, k, None)) for k in ('get_config','register_tool','register_hook'))
+    compatible = (all(callable(getattr(PluginContext, k, None)) for k in ('get_config','register_tool','register_hook','register_platform_handler','spawn_task','on_unload'))
                   and {'post_gateway_admission','transform_llm_output'} <= set(VALID_HOOKS)
                   and callable(get_session_env))
     version = 'unknown'
@@ -301,6 +301,7 @@ def report(state, answer=None):
               'product': 'AS-BOT Hermes 插件',
               'nativeMedia': 'PENDING_REAL_RECEIPT',
               'transportMode': state.get('transportMode', 'legacy'),
+              'explicitScreenshotCommands': 'ZERO_MODEL_GATEWAY_BINDING_REQUIRED',
               'busyCommandLane': 'HERMES_NATIVE_POLICY',
               'repeatedInboundCommands': 'HERMES_NATIVE_POLICY',
               'oldImageRecovery': 'HERMES_NATIVE_POLICY'}
