@@ -34,11 +34,12 @@ installer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(installer)
 CONNECT_ORIGIN = 'https://asbot-connect.zhouzhou.edu.kg'
 BUSINESS_ORIGIN = 'https://asbot.zhouzhou.edu.kg'
-CLIENT_VERSION = '1.4.1'
+CLIENT_VERSION = '1.5.0'
 PAIR_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 STATES = {'awaiting_owner', 'awaiting_identity', 'awaiting_eligibility', 'provisioning',
           'ready', 'active', 'uncertain', 'expired', 'revoked', 'denied'}
 UUID4 = re.compile(r'[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}')
+PROFILE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}')
 
 
 class ClientError(Exception):
@@ -102,8 +103,18 @@ def load_state(directory):
     if (not isinstance(value, dict) or not UUID4.fullmatch(value.get('enrollmentId', ''))
             or not re.fullmatch(r'[A-Za-z0-9_-]{43}', value.get('recovery', ''))
             or not re.fullmatch(r'[A-HJ-NP-Z2-9]{12}', value.get('pairingCode', ''))
-            or not clean_text(value.get('peer')) or not clean_text(value.get('profile'), 64)
             or not Path(value.get('hermesRoot', '')).is_absolute()):
+        raise ClientError('LOCAL_STATE_INVALID')
+    if 'wechatChoices' in value:
+        choices = value['wechatChoices']
+        if (not isinstance(choices, dict) or not 1 <= len(choices) <= 16
+                or any(not UUID4.fullmatch(key) or not isinstance(row, dict)
+                       or not isinstance(row.get('profile'), str) or not PROFILE.fullmatch(row['profile'])
+                       or not clean_text(row.get('peer')) or not clean_text(row.get('account'))
+                       or type(row.get('chat')) is not int or not 1 <= row['chat'] <= 16
+                       for key,row in choices.items())):
+            raise ClientError('LOCAL_STATE_INVALID')
+    elif not clean_text(value.get('peer')) or not clean_text(value.get('profile'), 64):
         raise ClientError('LOCAL_STATE_INVALID')
     return value
 
@@ -116,7 +127,7 @@ class ConnectTransport:
     """Fixed TLS origin, no ambient proxy, redirects, body logging or write replay."""
     def request(self, method, path, recovery, payload=None):
         if (method not in ('GET', 'POST') or not re.fullmatch(
-                r'/connect/v1/enrollments(?:/[a-f0-9-]{36}(?:/(?:claim|oauth|credentials|ack|proof-code))?)?', path)
+                r'/connect/v1/enrollments(?:/[a-f0-9-]{36}(?:/(?:claim|oauth|credentials|ack|proof-code|wechat-check))?)?', path)
                 or not re.fullmatch(r'[A-Za-z0-9_-]{43}', recovery)):
             raise ClientError('INVALID_CONNECT_REQUEST')
         body = None if payload is None else json.dumps(payload, separators=(',', ':')).encode()
@@ -239,15 +250,24 @@ def choose(values, label, explicit=None):
     return values[int(answer)-1]
 
 
-def select_peer(hermes_root=None, profile=None, peer=None):
+def profile_homes(hermes_root=None, *, all_profiles=False):
     hermes = Path(hermes_root or os.environ.get('HERMES_HOME') or Path.home()/'.hermes').expanduser().absolute()
+    if all_profiles and not hermes_root and hermes.parent.name=='profiles' and not hermes.parent.is_symlink() and not hermes.is_symlink():
+        # Hermes can set HERMES_HOME to a named profile while running its Python.
+        if (hermes.parent.parent/'config.yaml').is_file():
+            hermes = hermes.parent.parent
     if hermes.is_symlink() or not hermes.is_dir():
         raise ClientError('EXISTING_HERMES_REQUIRED')
     homes = {'default': hermes}
     profiles = hermes/'profiles'
     if profiles.is_dir() and not profiles.is_symlink():
         homes.update({p.name:p for p in profiles.iterdir() if p.is_dir() and not p.is_symlink()
-                      and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}', p.name) and p.name != 'default'})
+                      and PROFILE.fullmatch(p.name) and p.name != 'default'})
+    return hermes, homes
+
+
+def select_peer(hermes_root=None, profile=None, peer=None):
+    hermes, homes = profile_homes(hermes_root)
     admitted = {}
     for name, home in homes.items():
         if not (home/'config.yaml').is_file():
@@ -261,6 +281,102 @@ def select_peer(hermes_root=None, profile=None, peer=None):
     selected = choose(admitted, 'PROFILE', profile)
     selected_peer = choose(admitted[selected], 'PEER', peer)
     return hermes, selected, selected_peer
+
+
+def configured_wechat(home, config):
+    """Resolve this profile's configured account, ignoring historical QR login caches."""
+    platforms = config.get('platforms') or {}
+    wechat = (platforms.get('weixin') or {}) if isinstance(platforms, dict) else {}
+    extra = (wechat.get('extra') or {}) if isinstance(wechat, dict) else {}
+    if not isinstance(wechat, dict) or not isinstance(extra, dict):
+        raise ClientError('WECHAT_CONFIG_INVALID')
+    if wechat.get('enabled') is False:
+        return None
+    env = {}
+    path = home/'.env'
+    if path.exists() or path.is_symlink():
+        secure_file(path)
+        if path.stat().st_size > 262144:
+            raise ClientError('WECHAT_CONFIG_INVALID')
+        from dotenv import dotenv_values  # supplied by the existing Hermes environment
+        env = dotenv_values(path,interpolate=False)
+    # Hermes enables a fully configured .env account even when the YAML omits Weixin.
+    if env.get('WEIXIN_ACCOUNT_ID') and env.get('WEIXIN_TOKEN'):
+        account, token = env['WEIXIN_ACCOUNT_ID'], env['WEIXIN_TOKEN']
+    elif wechat.get('enabled') is True:
+        account, token = extra.get('account_id',wechat.get('account_id')), wechat.get('token') or extra.get('token')
+    else:
+        return None
+    return account if clean_text(account) and isinstance(token,str) and token.strip() else None
+
+
+def plugin_available(home, config):
+    plugins = config.get('plugins', {})
+    return (isinstance(plugins,dict) and isinstance(plugins.get('enabled', []),list)
+            and isinstance(plugins.get('disabled', []),list)
+            and isinstance(plugins.get('entries', {}),dict)
+            and 'asbot-bridge' not in plugins.get('enabled', []) and 'asbot-bridge' not in plugins.get('entries', {})
+            and 'asbot-bridge' not in plugins.get('disabled', [])
+            and not (home/'plugins/asbot-bridge').exists() and not (home/'plugins/asbot-bridge').is_symlink())
+
+
+def discover_wechat(hermes_root=None):
+    hermes, homes = profile_homes(hermes_root,all_profiles=True)
+    choices = {}
+    for name, home in sorted(homes.items()):
+        if not (home/'config.yaml').is_file():
+            continue
+        config = installer.local.load_yaml(home/'config.yaml')
+        account = configured_wechat(home,config)
+        if not account or not plugin_available(home,config):
+            continue
+        try:
+            peers = installer.local.approved_bindings(home)
+        except ValueError as error:
+            if str(error) != 'NO_EXISTING_APPROVED_WEIXIN_PEERS':
+                raise
+            continue
+        for chat, peer in enumerate(sorted(peers),1):
+            choices[str(uuid.uuid4())] = {'profile':name,'chat':chat,'peer':peer,'account':account}
+            if len(choices)>16:
+                raise ClientError('TOO_MANY_WEIXIN_BINDINGS')
+            if len(peers)>1 and peers[peer] and sys.stderr.isatty():
+                print(f'{name} · 微信私聊 {chat}：{peers[peer][:80]}（仅本机显示）',file=sys.stderr)
+    if not choices:
+        raise ClientError('NO_AVAILABLE_WEIXIN_BINDINGS')
+    return hermes, choices
+
+
+def selected_wechat(directory, state, selected, installation_id=None):
+    options = state['wechatChoices']
+    if (not isinstance(selected,dict) or type(selected.get('checked')) is not bool
+            or not isinstance(selected.get('generation'),str) or not UUID4.fullmatch(selected['generation'])
+            or not isinstance(selected.get('ids'),list) or not selected['ids']
+            or any(not isinstance(key,str) or key not in options for key in selected['ids'])
+            or len(set(selected['ids']))!=len(selected['ids'])):
+        raise ClientError('WECHAT_SELECTION_INVALID')
+    _, homes = profile_homes(state['hermesRoot'])
+    bindings = [options[key] for key in selected['ids']]
+    receipt = directory/'install-receipt.json'
+    owned = receipt.exists()
+    if owned and not state.get('installed'):
+        installer.owned_receipt(receipt, state.get('installationId') or installation_id)
+    for binding in bindings:
+        home = homes.get(binding['profile'])
+        if home is None or not (home/'config.yaml').is_file():
+            raise ClientError('WECHAT_BINDING_CHANGED')
+        config = installer.local.load_yaml(home/'config.yaml')
+        if configured_wechat(home,config)!=binding['account'] or (not owned and not plugin_available(home,config)):
+            raise ClientError('WECHAT_BINDING_CHANGED')
+        try:
+            peers = installer.local.approved_peers(home)
+        except ValueError as error:
+            if str(error)=='NO_EXISTING_APPROVED_WEIXIN_PEERS':
+                raise ClientError('WECHAT_BINDING_CHANGED') from None
+            raise
+        if binding['peer'] not in peers:
+            raise ClientError('WECHAT_BINDING_CHANGED')
+    return bindings
 
 
 def base_path(state):
@@ -306,7 +422,11 @@ def report(state, answer=None):
               'repeatedInboundCommands': 'HERMES_NATIVE_POLICY',
               'oldImageRecovery': 'HERMES_NATIVE_POLICY'}
     if state.get('remoteState') in ('awaiting_owner', 'awaiting_identity') and not state.get('identityVerified'):
-        result['identityCommand'] = '/接入确认 '+state['pairingCode']
+        if 'wechatChoices' in state:
+            result['pairingCode'] = state['pairingCode']
+            result['manageUrl'] = CONNECT_ORIGIN+'/connect/manage'
+        else:
+            result['identityCommand'] = '/接入确认 '+state['pairingCode']
         result['identityDeadlineAt'] = state.get('identityDeadlineAt')
     if state.get('installed'):
         result['localInstall'] = 'INSTALLED'
@@ -357,31 +477,36 @@ def hidden_invite(prompt):
             raise ClientError('HIDDEN_TERMINAL_INPUT_REQUIRED') from None
 
 
-def setup(directory, transport, *, hermes_root=None, profile=None, peer=None, device_label=None, invite_input=None):
+def setup(directory, transport, *, hermes_root=None, profile=None, peer=None, device_label=None, invite_input=None, manage=False):
     manifest = installer.verify_payload(ROOT)
     state = load_state(directory)
+    if manage and (profile is not None or peer is not None):
+        raise ClientError('WEB_PAIRING_SELECTS_WEIXIN')
     if state is None:
-        hermes, selected, selected_peer = select_peer(hermes_root, profile, peer)
-        home = hermes if selected == 'default' else hermes/'profiles'/selected
-        current = installer.local.load_yaml(home/'config.yaml')
-        plugins = current.get('plugins', {})
-        if (not isinstance(plugins, dict) or 'asbot-bridge' in plugins.get('enabled', [])
-                or 'asbot-bridge' in plugins.get('entries', {})
-                or (home/'plugins/asbot-bridge').exists() or (home/'plugins/asbot-bridge').is_symlink()):
-            raise ClientError('EXISTING_PLUGIN_REQUIRES_OWNING_UPGRADE_PATH')
+        if manage:
+            hermes, choices = discover_wechat(hermes_root)
+            selection = {'wechatChoices': choices}
+        else:
+            hermes, selected, selected_peer = select_peer(hermes_root, profile, peer)
+            home = hermes if selected == 'default' else hermes/'profiles'/selected
+            if not plugin_available(home,installer.local.load_yaml(home/'config.yaml')):
+                raise ClientError('EXISTING_PLUGIN_REQUIRES_OWNING_UPGRADE_PATH')
+            selection = {'profile':selected,'peer':selected_peer}
         version = native_compatibility()
         label = device_label or 'Hermes '+sys.platform
         if not clean_text(label, 100):
             raise ClientError('DEVICE_LABEL_INVALID')
         state = {'enrollmentId': str(uuid.uuid4()), 'recovery': secrets.token_urlsafe(32),
                  'pairingCode': ''.join(secrets.choice(PAIR_ALPHABET) for _ in range(12)),
-                 'hermesRoot': str(hermes), 'profile': selected, 'peer': selected_peer,
+                 'hermesRoot': str(hermes), **selection,
                  'deviceLabel': label, 'hermesVersion': version, 'platform': sys.platform,
                  'transportMode': 'official',
                  'clientVersion': CLIENT_VERSION+'+'+manifest['sha'], 'created': False}
         save_state(directory, state)
     else:
-        for supplied, stored in ((profile, state['profile']), (peer, state['peer']),
+        if manage and 'wechatChoices' not in state:
+            raise ClientError('EXISTING_ENROLLMENT_SELECTION_MISMATCH')
+        for supplied, stored in ((profile, state.get('profile')), (peer, state.get('peer')),
                                  (str(Path(hermes_root).expanduser().absolute()) if hermes_root else None, state['hermesRoot'])):
             if supplied is not None and supplied != stored:
                 raise ClientError('EXISTING_ENROLLMENT_SELECTION_MISMATCH')
@@ -389,9 +514,12 @@ def setup(directory, transport, *, hermes_root=None, profile=None, peer=None, de
         state['createAttempted'] = True
         save_state(directory, state)
         payload = {key:state[key] for key in ('enrollmentId','deviceLabel','platform','hermesVersion','clientVersion','pairingCode')}
+        if 'wechatChoices' in state:
+            payload['wechatChoices'] = [{'id':key,'profile':item['profile'],'chat':item['chat']}
+                                        for key,item in state['wechatChoices'].items()]
         transport.request('POST', '/connect/v1/enrollments', state['recovery'], payload)
     answer = status(directory, state, transport)
-    if not state.get('invitationClaimed') and not state.get('claimAttempted') and state['remoteState'] == 'awaiting_owner':
+    if 'wechatChoices' not in state and not state.get('invitationClaimed') and not state.get('claimAttempted') and state['remoteState'] == 'awaiting_owner':
         # Never accept invitation/recovery/credentials as command line arguments.
         code = (invite_input or hidden_invite)('一次性邀请码（隐藏输入；直接回车可由管理员审批）：').strip()
         if code:
@@ -435,7 +563,8 @@ def local_doctor(directory, state):
 def reload_existing_plugins(state):
     """Use the already-running Hermes control socket; never start or restart it."""
     hermes=Path(state['hermesRoot'])
-    home=hermes if state['profile']=='default' else hermes/'profiles'/state['profile']
+    profiles = (dict.fromkeys(state['wechatChoices'][key]['profile'] for key in state['selectedWechatIds'])
+                if 'wechatChoices' in state else [state['profile']])
     try:
         source = hermes_python_source()
         if source is not None and str(source) not in sys.path:
@@ -443,10 +572,14 @@ def reload_existing_plugins(state):
         # Native diagnostic output may contain local private details.
         with contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):
             from gateway.control_socket import reload_gateway_plugins
-            answer=reload_gateway_plugins(home)
-            if answer is None and home!=hermes:
-                answer=reload_gateway_plugins(hermes,profile_home=home)
-        return 'RELOADED' if isinstance(answer,dict) and answer.get('reloaded') is True else 'PLUGIN_RELOAD_PENDING'
+            ready = True
+            for profile in profiles:
+                home=hermes if profile=='default' else hermes/'profiles'/profile
+                answer=reload_gateway_plugins(home)
+                if answer is None and home!=hermes:
+                    answer=reload_gateway_plugins(hermes,profile_home=home)
+                ready &= isinstance(answer,dict) and answer.get('reloaded') is True
+        return 'RELOADED' if ready else 'PLUGIN_RELOAD_PENDING'
     except Exception:
         return 'PLUGIN_RELOAD_PENDING'
 
@@ -457,11 +590,30 @@ def activate(directory, state, transport, *, wait=0, auth='discord'):
     native_compatibility()
     deadline = time.monotonic()+wait
     opened = False
+    manage = 'wechatChoices' in state
+    bindings = None
+    checked_generation = None
     while True:
         answer = status(directory, state, transport)
         refresh_proof(directory, state, transport)
         stage = state['remoteState']
-        if auth == 'web' and not opened and stage in ('awaiting_owner', 'awaiting_identity') and not state.get('identityVerified'):
+        if manage and stage in ('awaiting_identity','awaiting_eligibility','provisioning','ready','active'):
+            selected = answer.get('wechatSelection')
+            bindings = selected_wechat(directory,state,selected,answer.get('installationId'))
+            if stage == 'awaiting_identity' and not selected['checked']:
+                if checked_generation is not None:
+                    raise ClientError('WECHAT_SELECTION_INVALID')
+                checked_generation = selected['generation']
+                result = request(transport,state,'/wechat-check','POST',{'generation':selected['generation']})
+                if result.get('checked') is not True:
+                    raise ClientError('WECHAT_SELECTION_INVALID')
+                continue
+            if (not selected['checked'] or checked_generation is not None and selected['generation']!=checked_generation
+                    or state.get('installed') and state.get('selectedWechatIds')!=selected['ids']):
+                raise ClientError('WECHAT_SELECTION_INVALID')
+            state['selectedWechatIds'] = selected['ids']
+            save_state(directory,state)
+        if not manage and auth == 'web' and not opened and stage in ('awaiting_owner', 'awaiting_identity') and not state.get('identityVerified'):
             oauth = request(transport, state, '/oauth', 'POST', {})
             url = oauth.get('url')
             parsed = urllib.parse.urlsplit(url) if isinstance(url, str) else None
@@ -509,18 +661,22 @@ def activate(directory, state, transport, *, wait=0, auth='discord'):
         if stage != 'ready':
             raise ClientError('ACTIVE_DEVICE_LOCAL_CREDENTIALS_MISSING_CONTACT_OWNER')
         state['installationId'] = bundle['installationId']
+        targets = bindings if manage else [state]
+        if not targets:
+            raise ClientError('WECHAT_SELECTION_INVALID')
         config = {'external_access': True, 'account_id': bundle['accountId'],
                   'installation_id': bundle['installationId'], 'origin': bundle['origin'],
                   'state_dir': str(directory/'bridge-state'), 'access': bundle['access'],
-                  'principals': [{'profile': state['profile'], 'user_id': state['peer'], 'chat_id': state['peer'],
-                                  'bearer_token': bundle['bearerToken'], 'enabled': True}]}
+                  **({'shared_installation_token': True} if len(targets)>1 else {}),
+                  'principals': [{'profile': target['profile'], 'user_id': target['peer'], 'chat_id': target['peer'],
+                                  'bearer_token': bundle['bearerToken'], 'enabled': True} for target in targets]}
         pending = directory/'pending-bridge.json'
         installer.atomic(pending, json.dumps(config, ensure_ascii=False).encode())
         receipt = directory/'install-receipt.json'
         if receipt.exists():
             installer.owned_receipt(receipt, bundle['installationId'])
         else:
-            installer.install(ROOT, Path(state['hermesRoot']), pending, [state['profile']], True,
+            installer.install(ROOT, Path(state['hermesRoot']), pending, list(dict.fromkeys(t['profile'] for t in targets)), True,
                               installation_id=bundle['installationId'], private_root=directory)
         state['installed'] = True
         save_state(directory, state)
@@ -552,11 +708,14 @@ def main(argv=None):
     parser.add_argument('--hermes-root', type=Path)
     parser.add_argument('--profile')
     parser.add_argument('--peer', help='Exact already-approved local DM peer; never sent to AS-BOT')
+    parser.add_argument('--manage', action='store_true', help='Choose configured WeChat bindings in the Web management page')
     parser.add_argument('--device-label')
     parser.add_argument('--auth', choices=['discord','web'], default='discord')
     parser.add_argument('--wait', type=int, default=0, help='Bounded activation polling, 0..120 seconds')
     args = parser.parse_args(argv)
     try:
+        if args.manage and args.action!='setup':
+            raise ClientError('WEB_PAIRING_SETUP_ONLY')
         if not 0 <= args.wait <= 120:
             raise ClientError('WAIT_OUT_OF_RANGE')
         directory = private_directory(args.state_dir)
@@ -564,7 +723,7 @@ def main(argv=None):
             transport = ConnectTransport()
             if args.action == 'setup':
                 result = setup(directory, transport, hermes_root=args.hermes_root,
-                               profile=args.profile, peer=args.peer, device_label=args.device_label)
+                               profile=args.profile, peer=args.peer, device_label=args.device_label, manage=args.manage)
             else:
                 state = load_state(directory)
                 if state is None:
