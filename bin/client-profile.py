@@ -22,8 +22,8 @@ def dump_yaml(value):
     return yaml.safe_dump(value, sort_keys=False, allow_unicode=True).encode()
 
 
-def approved_peers(home):
-    peers = set()
+def approved_bindings(home):
+    peers = {}
     for path in (home/'platforms/pairing/weixin-approved.json', home/'pairing/weixin-approved.json'):
         if not path.exists():
             continue
@@ -33,10 +33,17 @@ def approved_peers(home):
                 len(key) > 512 or any(ord(c) < 32 for c in key) or not isinstance(info, dict)
                 for key, info in value.items())):
             raise ValueError('APPROVED_PAIRING_STORE_INVALID')
-        peers.update(value)
+        for key, info in value.items():
+            name = info.get('user_name')
+            if key not in peers or not peers[key]:
+                peers[key] = name if isinstance(name,str) and name!=key and name.isprintable() else None
     if not peers:
         raise ValueError('NO_EXISTING_APPROVED_WEIXIN_PEERS')
     return peers
+
+
+def approved_peers(home):
+    return set(approved_bindings(home))
 
 
 def merge_profile(config, profile, config_path, preserve_search=True):

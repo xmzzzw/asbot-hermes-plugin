@@ -1,6 +1,6 @@
 # AS-BOT Hermes 插件
 
-给已有官方 Hermes Agent 增加 AS-BOT 截图与经济日历工具。公开仓库为 [xmzzzw/asbot-hermes-plugin](https://github.com/xmzzzw/asbot-hermes-plugin)，插件发行版为 `1.4.1`。这不是 Hermes 的分支、替代客户端或指定版本的 Hermes；安装器不会安装、升级、降级 Hermes，不改变模型、搜索、审批、微信登录或其他插件。`bin/plugin.py` 只是本插件的安装与认证助手；旧入口 `bin/client.py` 保留兼容。
+给已有官方 Hermes Agent 增加 AS-BOT 截图与经济日历工具。公开仓库为 [xmzzzw/asbot-hermes-plugin](https://github.com/xmzzzw/asbot-hermes-plugin)，插件发行版为 `1.5.0`。这不是 Hermes 的分支、替代客户端或指定版本的 Hermes；安装器不会安装、升级、降级 Hermes，不改变模型、搜索、审批、微信登录或其他插件。`bin/plugin.py` 只是本插件的安装与认证助手；旧入口 `bin/client.py` 保留兼容。
 
 固定发行版、完整源 SHA 和校验值都指 **AS-BOT 插件**，用于核对来源与恢复，与你的 Hermes 版本无关。基础接入按官方公开插件接口检测能力，不再比较微信适配器的源码指纹。未来 Hermes 若破坏公开接口仍可能需要插件适配；不能承诺任何未来版本永不受影响。
 
@@ -15,7 +15,9 @@ python3 bin/plugin.py status
 python3 bin/plugin.py doctor
 ```
 
-安装助手自动检测 `HERMES_HOME`，未设置时使用 `~/.hermes`，发现已有 Profile 和已批准微信私聊。只有一个时自动选择，多个时在本机选择；不要猜测或扩大已批准范围。路径含中文、空格时加引号。原始微信 ID 留在本机，不上传用作账号认证。
+安装助手自动检测 `HERMES_HOME`，未设置时使用 `~/.hermes`。上述接入码流程只有一个时自动选择，多个时在本机选一个。路径含中文、空格时加引号。
+
+管理员通知可以用 Web 自主管理时，改用 `python3 bin/plugin.py setup --manage`，把 `pairingCode` 填入管理页。网页只显示已配置微信、存在已批准私聊且可新装插件的选项；只有一个时默认勾选，多个可同时勾选。确认后运行 `activate --wait 120`，它会先核对选中的本机绑定。多个配置归在同一台设备下，共享额度，撤销该设备会一起停用。原始微信 ID、登录凭据和本机路径只留在设备上。
 
 接入码只在隐藏终端提示中输入，不放在命令参数、环境变量或日志。直接回车也可先申请、等待管理员审核。会员按管理员要求在 Discord 使用 `/接入确认 配对码`，或运行 `activate --auth web` 登录 Discord。本人身份验证成功仍需管理员批准和资格检查。
 

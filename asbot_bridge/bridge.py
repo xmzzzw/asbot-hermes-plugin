@@ -171,6 +171,11 @@ def validate_config(config):
         raise BridgeError("INVALID_CONFIGURATION")
     if "external_access" in config and type(config["external_access"]) is not bool:
         raise BridgeError("INVALID_CONFIGURATION")
+    shared = config.get("shared_installation_token", False)
+    if type(shared) is not bool or shared and (config.get("external_access") is not True or
+            not isinstance(config.get("installation_id"),str) or not re.fullmatch(r"device-[a-f0-9-]{36}",config["installation_id"]) or
+            not 2 <= len(config["principals"]) <= 16):
+        raise BridgeError("INVALID_CONFIGURATION")
     identities, tokens = set(), set()
     for principal in config["principals"]:
         if (not isinstance(principal, dict)
@@ -178,7 +183,9 @@ def validate_config(config):
                 or type(principal.get("enabled")) is not bool):
             raise BridgeError("INVALID_CONFIGURATION")
         identity = (principal["profile"], principal["user_id"], principal["chat_id"])
-        if identity in identities or principal["bearer_token"] in tokens:
+        if identity in identities or (not shared and principal["bearer_token"] in tokens) or (
+                shared and (not principal["enabled"] or principal["user_id"] != principal["chat_id"] or
+                            bool(tokens and principal["bearer_token"] not in tokens))):
             raise BridgeError("INVALID_CONFIGURATION")
         identities.add(identity)
         tokens.add(principal["bearer_token"])

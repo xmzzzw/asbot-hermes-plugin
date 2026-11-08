@@ -205,6 +205,12 @@ def check_receipt(receipt):
         raise ValueError('BRIDGE_CONFIG_CHANGED')
 
 
+def device_tokens(config, expected=None):
+    principals=config['principals']
+    return (len(principals)==1 or config.get('shared_installation_token') is True) and (
+        expected is None or all(p['bearer_token']==expected for p in principals))
+
+
 def rotate_credentials(receipt_file, installation_id, bundle):
     """CAS only this install's credentials, preserving profile/plugin/ledger state.
 
@@ -218,10 +224,10 @@ def rotate_credentials(receipt_file, installation_id, bundle):
         if (intent.get('installationId')!=installation_id or
                 intent.get('credentialVersion')!=bundle['credentialVersion']):
             raise ValueError('CREDENTIAL_UPDATE_REQUIRES_RECONCILIATION')
-        replacement=json.loads(intent['newConfig'])
+        replacement=validate_config(json.loads(intent['newConfig']))
         if (replacement.get('account_id')!=bundle['accountId'] or replacement.get('installation_id')!=installation_id
                 or replacement.get('origin')!=bundle['origin'] or replacement.get('access')!=bundle['access']
-                or len(replacement['principals'])!=1 or replacement['principals'][0]['bearer_token']!=bundle['bearerToken']):
+                or not device_tokens(replacement,bundle['bearerToken'])):
             raise ValueError('CREDENTIAL_UPDATE_REQUIRES_RECONCILIATION')
         private_file(receipt_file)
         receipt_raw=receipt_file.read_bytes()
@@ -239,15 +245,16 @@ def rotate_credentials(receipt_file, installation_id, bundle):
         return
     receipt=owned_receipt(receipt_file,installation_id)
     config_file=Path(receipt['config']);before=config_file.read_bytes()
-    config=json.loads(before)
+    config=validate_config(json.loads(before))
     if (config.get('account_id')!=bundle['accountId'] or config.get('installation_id')!=installation_id
             or bundle['installationId']!=installation_id or config.get('origin')!=bundle['origin']
-            or len(config['principals'])!=1):
+            or not device_tokens(config)):
         raise ValueError('INSTALLATION_OWNERSHIP_MISMATCH')
-    if (config['access']==bundle['access'] and config['principals'][0]['bearer_token']==bundle['bearerToken']
+    if (config['access']==bundle['access'] and device_tokens(config,bundle['bearerToken'])
             and receipt.get('credentialVersion')==bundle['credentialVersion']):return
     config['access']=bundle['access']
-    config['principals'][0]['bearer_token']=bundle['bearerToken']
+    for principal in config['principals']:
+        principal['bearer_token']=bundle['bearerToken']
     after=json.dumps(config,ensure_ascii=False).encode()
     old_receipt=receipt_file.read_bytes()
     receipt['configHash']=hashlib.sha256(after).hexdigest()
