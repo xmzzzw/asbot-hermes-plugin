@@ -18,7 +18,7 @@ from .deliveries import Deliveries
 JOB_SECONDS = 600
 SEND_SECONDS = 60
 NOTICE_SECONDS = 15
-HELP = ("截图：1 / BTC1 / 截图1；支持 0–9，单条最多 5 项。\n"
+HELP = ("截图：1 / BTC1 / 截图1；编号随截图目录自动更新，单条最多 5 项。\n"
         "同模板新图可发 1 #A01、1 #A02；编号只区分消息文本。\n"
         "明确指令不调用模型；普通聊天保留原模型路径。\n"
         "截图状态：查看已记录任务。结果未知时不自动补发。\n"
@@ -37,7 +37,7 @@ def parse(text):
     if value in ('截图状态','/asbot status','/截图 状态'):
         return 'status', None
     value = re.sub(r'^/(?:asbot|截图)\s+','',value,flags=re.I)
-    token = r'(?:(?:BTC|截图)\s*)?([0-9])'
+    token = r'(?:(?:BTC|截图)\s*)?(0|[1-9][0-9]{0,2})'
     if re.fullmatch(token+r'(?:[\s,，、]+'+token+r')*',value,re.I):
         return 'capture', tuple(re.findall(token,value,re.I))
     if value.isdigit() or re.match(r'^(?:BTC|截图)(?:\s*\d|\s*$)',value,re.I):
@@ -129,7 +129,7 @@ class FastLane:
             bridge.principal(item)
             action,args=command
             if action=='invalid' or (action=='capture' and len(args)>5):
-                return handled('COMMAND_INVALID','请发送 0–9、BTC1 或 截图1；单条最多 5 项。')
+                return handled('COMMAND_INVALID','请按截图帮助中的编号发送，如 1、BTC1 或 截图1；单条最多 5 项。')
             deliveries=Deliveries(bridge)
             if action=='status':return handled('RECORDED_STATUS',deliveries.status(item))
             if not self.available:return handled('PLUGIN_API_UNAVAILABLE','Hermes 插件接口尚未就绪，未提交截图。')
@@ -178,9 +178,9 @@ class FastLane:
                 rows=catalog.get('templates')
                 if not isinstance(rows,list):raise BridgeError('INVALID_API_RESPONSE')
                 lines=[];seen=set()
-                valid=[r for r in rows if isinstance(r,dict) and re.fullmatch(r'[0-9]',str(r.get('shortcut','')))]
-                for row in sorted(valid,key=lambda r:int(r['shortcut']))[:10]:
-                    if not isinstance(row,dict) or not re.fullmatch(r'[0-9]',str(row.get('shortcut',''))):continue
+                valid=[r for r in rows if isinstance(r,dict) and re.fullmatch(r'(?:0|[1-9][0-9]{0,2})',str(r.get('shortcut','')))]
+                for row in sorted(valid,key=lambda r:int(r['shortcut'])):
+                    if not isinstance(row,dict) or not re.fullmatch(r'(?:0|[1-9][0-9]{0,2})',str(row.get('shortcut',''))):continue
                     shortcut=str(row['shortcut'])
                     if shortcut in seen:continue
                     seen.add(shortcut)

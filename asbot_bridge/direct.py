@@ -17,7 +17,7 @@ def commands(text):
     if not isinstance(text, str) or len(text) > 256:
         return None
     text = re.sub(r"^/(?:asbot|截图)\s+", "", text.strip(), flags=re.I)
-    token = r"(?:(?:BTC|截图)\s*)?([0-9])"
+    token = r"(?:(?:BTC|截图)\s*)?(0|[1-9][0-9]{0,2})"
     if not re.fullmatch(token + r"(?:[\s,，、]+" + token + r")*", text.strip(), re.I):
         return None
     return tuple(re.findall(token, text.strip(), re.I))
@@ -43,7 +43,7 @@ def control(text):
     return "calendar:" + (match[1] or "今天") if match else None
 
 
-HELP = ("截图：直接发 0–9 或 BTC0–BTC9。\n"
+HELP = ("截图：按截图帮助中的编号发送，如 1 或 BTC1。\n"
         "连续发送 1、2，或一次发 1 2，都会逐条排队回图；最多 5 条。\n"
         "数字截图不调用 AI；需要分析时引用图片提问。\n"
         "发‘截图状态’查看本会话队列。")
@@ -136,7 +136,7 @@ async def control_reply(bridge, identity, adapter, operation):
     try:
         if operation == "help":
             result = await asyncio.to_thread(bridge.service_get, identity, "screenshot-templates")
-            reply = "\n".join("BTC" + str(t["shortcut"]) + "：" + t["name"] + ("" if t.get("available") else "（暂不可用）") for t in result.get("templates", [])[:10])
+            reply = "\n".join("BTC" + str(t["shortcut"]) + "：" + t["name"] + ("" if t.get("available") else "（暂不可用）") for t in result.get("templates", []))
         elif operation == "quota":
             result = await asyncio.to_thread(bridge.service_get, identity, "me")
             reply = "\n".join(name + "：已用 " + str(q["used"]) + "，预占 " + str(q["reserved"]) + "，上限 " + str(q["limit"]) for name, q in result.get("quotas", {}).items())
