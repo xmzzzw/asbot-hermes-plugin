@@ -199,9 +199,10 @@ def normalize(capability, args):
         if set(args) != {"shortcut"} or not isinstance(args["shortcut"], str):
             raise BridgeError("INVALID_INPUT")
         value = args["shortcut"].upper()
-        if not re.fullmatch(r"(?:BTC)?[0-9]", value):
+        match = re.fullmatch(r"(?:BTC)?(0|[1-9][0-9]{0,2})", value)
+        if not match:
             raise BridgeError("INVALID_INPUT")
-        return {"shortcut": value[-1]}
+        return {"shortcut": match[1]}
     if capability == "economic.query":
         kind, limit = args.get("kind", "今天"), args.get("limit", 20)
         if set(args) - {"kind", "limit"} or kind not in KINDS or type(limit) is not int or not 1 <= limit <= 50:

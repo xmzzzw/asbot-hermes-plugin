@@ -112,10 +112,10 @@ def register(ctx):
                               "Do not call capture again or resend the image. Images expire within ten minutes.",
                               "parameters": {"type": "object", "additionalProperties": False, "properties": {}}})
 
-    capture_description = ("Capture BTC0–BTC9. The plugin retains the private image and attaches it through the normal "
+    capture_description = ("Capture a numbered template from the current AS-BOT screenshot catalog. The plugin retains the private image and attaches it through the normal "
                            "Hermes reply after fresh delivery authorization. Return ordinary text; do not recapture or "
                            "claim image delivery from a successful capture status.") if mode == "official" else (
-                           "Capture BTC0–BTC9. On success include the returned media directive verbatim in your reply. "
+                           "Capture a numbered template from the current AS-BOT screenshot catalog. On success include the returned media directive verbatim in your reply. "
                            "For analysis use vision on the returned image path; never recapture just to analyze.")
     ctx.register_tool(name="asbot_screenshot_capture", toolset="asbot_bridge", handler=capture,
                       description="Capture an allowed AS-BOT template; identities come from the live Weixin session.",
@@ -123,7 +123,7 @@ def register(ctx):
                               capture_description,
                               "parameters": {"type": "object", "additionalProperties": False,
                                              "required": ["shortcut"], "properties": {
-                                                 "shortcut": {"type": "string", "pattern": "^(BTC)?[0-9]$"}}}})
+                                                 "shortcut": {"type": "string", "pattern": "^(?:BTC)?(?:0|[1-9][0-9]{0,2})$"}}}})
     ctx.register_tool(name="asbot_economic_query", toolset="asbot_bridge", handler=economic,
                       description="Read AS-BOT economic calendar with freshness evidence.",
                       schema={"name": "asbot_economic_query", "description":
