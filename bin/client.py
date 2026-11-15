@@ -34,7 +34,7 @@ installer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(installer)
 CONNECT_ORIGIN = 'https://asbot-connect.zhouzhou.edu.kg'
 BUSINESS_ORIGIN = 'https://asbot.zhouzhou.edu.kg'
-CLIENT_VERSION = '1.5.1'
+CLIENT_VERSION = '1.7.0'
 PAIR_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 STATES = {'awaiting_owner', 'awaiting_identity', 'awaiting_eligibility', 'provisioning',
           'ready', 'active', 'uncertain', 'expired', 'revoked', 'denied'}
@@ -397,6 +397,7 @@ def status(directory, state, transport):
     state['invitationClaimed'] = answer.get('invitationClaimed') is True
     state['identityVerified'] = answer.get('identityVerified') is True
     state['identityDeadlineAt'] = answer.get('identityDeadlineAt')
+    state['canRefreshPairing'] = answer.get('canRefreshPairing') is True
     version=answer.get('credentialVersion')
     if stage in ('ready','active'):
         if type(version) is not int or version<1:
@@ -446,7 +447,7 @@ def report(state, answer=None):
 
 def refresh_proof(directory, state, transport):
     expiry = state.get('identityDeadlineAt')
-    if (state.get('remoteState') not in ('awaiting_owner', 'awaiting_identity')
+    if ((state.get('remoteState') not in ('awaiting_owner', 'awaiting_identity') and not state.get('canRefreshPairing'))
             or state.get('identityVerified') or not isinstance(expiry, str)):
         return
     try:
@@ -703,7 +704,7 @@ def activate(directory, state, transport, *, wait=0, auth='discord'):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['setup','activate','status','doctor','update','uninstall'])
+    parser.add_argument('action', choices=['setup','activate','status','doctor','update','uninstall','enable-updates','managed-tick','pause-updates','resume-updates'])
     parser.add_argument('--state-dir', type=Path, default=default_state_dir())
     parser.add_argument('--hermes-root', type=Path)
     parser.add_argument('--profile')
@@ -712,6 +713,8 @@ def main(argv=None):
     parser.add_argument('--device-label')
     parser.add_argument('--auth', choices=['discord','web'], default='discord')
     parser.add_argument('--wait', type=int, default=0, help='Bounded activation polling, 0..120 seconds')
+    parser.add_argument('--restart-gateway',action='store_true',help='Allow one idle Gateway restart and one recovery restart')
+    parser.add_argument('--pilot-updates',action='store_true')
     args = parser.parse_args(argv)
     try:
         if args.manage and args.action!='setup':
@@ -728,7 +731,11 @@ def main(argv=None):
                 state = load_state(directory)
                 if state is None:
                     raise ClientError('SETUP_REQUIRED')
-                if args.action == 'status':
+                if args.action in ('enable-updates','managed-tick','pause-updates','resume-updates'):
+                    update_spec=importlib.util.spec_from_file_location("asbot_managed_update",ROOT/'bin/managed-update.py')
+                    managed=importlib.util.module_from_spec(update_spec);update_spec.loader.exec_module(managed)
+                    result=managed.run(args,directory,state,installer,sys.modules[__name__])
+                elif args.action == 'status':
                     answer = status(directory,state,transport)
                     refresh_proof(directory,state,transport)
                     result = report(state,answer)

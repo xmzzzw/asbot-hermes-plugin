@@ -16,7 +16,9 @@
 
 ## 2. 下载并校验 AS-BOT 插件
 
-目前对接的公开发行版是 [AS-BOT Hermes 插件 v1.4.1](https://github.com/xmzzzw/asbot-hermes-plugin/releases/tag/v1.4.1)，文件名为 `asbot-hermes-plugin-v1.4.1.zip`。`v1.4.1` 是**插件版本**，不需要把 Hermes 改装成同一个版本。使用邀请指定的正式 ZIP；GitHub 的 “Source code (zip)” 不是该安装包。
+截图队列修复版见 [v1.7.1 发行页](https://github.com/xmzzzw/asbot-hermes-plugin/releases/tag/v1.7.1)。下载 `asbot-hermes-plugin-v1.7.1.zip` 后，使用该页的 SHA-256 核对。已有安装用原状态目录运行 `python3 bin/plugin.py update`，不重新配对。
+
+旧接入码仍支持 [AS-BOT Hermes 插件 v1.4.1](https://github.com/xmzzzw/asbot-hermes-plugin/releases/tag/v1.4.1)，文件名为 `asbot-hermes-plugin-v1.4.1.zip`。`v1.4.1` 是**插件版本**，不需要把 Hermes 改装成同一个版本。使用邀请指定的正式 ZIP；GitHub 的 “Source code (zip)” 不是该安装包。
 
 先在下载目录核对 ZIP 的 SHA-256，与管理员通过可信渠道提供的校验值一致后再解压。macOS 示例：
 
@@ -41,8 +43,8 @@ shasum -a 256 asbot-hermes-plugin-v1.4.1.zip
 
 ## 3B. 使用 Web 自主管理：管理员已通知开放时
 
-1. **亲友**：在支持 Passkey 的浏览器打开管理员私发的一次性邀请链接，点「绑定 Passkey」，按系统提示完成确认。以后从 [Hermes 自主管理页](https://asbot-connect.zhouzhou.edu.kg/connect/manage) 点「用 Passkey 登录」。**会员**：在同一个管理页用已经绑定的 Discord 登录。Passkey 邀请链接用于登录，不是终端接入码。
-2. 如果管理员提供支持 `setup --manage` 的插件（从 v1.5.0 起），运行 `python3 bin/plugin.py setup --manage`，复制输出中的 `pairingCode`。使用 v1.4.1 时运行 `python3 bin/plugin.py setup`，在终端选定一个 Profile 和私聊，接入码提示直接回车，再复制 `identityCommand` 中 `/接入确认` 后的 12 位码。配对码通常 10 分钟有效。
+1. **亲友**：在支持 Passkey 的浏览器打开管理员私发的一次性邀请链接，点「绑定 Passkey」，按系统提示完成确认。以后从 [Hermes 自主管理页](https://asbot-connect.zhouzhou.edu.kg/connect/manage) 点「用 Passkey 登录」。**会员或交易员**：在同一个管理页选择对应入口，用已绑定会员资料或持有 Trader 角色的 Discord 登录。Passkey 邀请链接用于登录，不是终端接入码。
+2. 如果管理员提供支持 `setup --manage` 的插件（从 v1.5.0 起），运行 `python3 bin/plugin.py setup --manage`，复制输出中的 `pairingCode`。使用 v1.4.1 时运行 `python3 bin/plugin.py setup`，在终端选定一个 Profile 和私聊，接入码提示直接回车，再复制 `identityCommand` 中 `/接入确认` 后的 12 位码。新签发配对码有效 24 小时，截止时间由安装器显示，确认后即失效。
 3. 在网页填入配对码，点「核对设备」。核对设备名、系统和 Hermes 版本。新版只找到一个微信绑定时会默认勾选；找到多个时，可同时勾选想接入的配置。网页只显示配置名和私聊序号，原始微信标识与登录凭据留在本机。点「确认配对」后，回到安装器执行第 4 节。这里不用传 `--auth web`；那个参数属于旧流程的 Discord 验证。
 4. 激活后回网页点「刷新状态」。选中的配置都显示在同一台设备下，共享账号额度。换机或丢失设备时可以撤销该设备，设备下所有配置会一起失去 AS-BOT 接入权限。「已停用，待清理」表示该设备已不能调用 AS-BOT，外部资源仍由管理员核对。
 
