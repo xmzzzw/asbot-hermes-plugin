@@ -14,6 +14,7 @@ import time
 
 from .bridge import Bridge, BridgeError, Identity, bind_inbound, private_file, validate_png
 from .deliveries import Deliveries
+from .managed import monitor, admission
 
 JOB_SECONDS = 600
 SEND_SECONDS = 60
@@ -91,6 +92,14 @@ class FastLane:
         if adapter is not self.adapter:self.epoch+=1
         self.adapter,self.loop=adapter,loop
         self.pending='READY'
+        if not any(t.get_name()=="asbot-managed-monitor" for t in self.tasks if hasattr(t,"get_name") and not t.done()):
+            if (Path(self.config_path).parent/"install-receipt.json").is_file():
+                coro=monitor(self)
+                try:
+                    task=self.ctx.spawn_task(coro,name="asbot-managed-monitor")
+                    self.tasks.add(task);task.add_done_callback(self.tasks.discard)
+                except Exception:
+                    coro.close()
 
     def wire_catalog(self,native,adapter):
         """Public binding for catalog-capable command handling.
@@ -131,7 +140,13 @@ class FastLane:
             if action=='invalid' or (action=='capture' and len(args)>5):
                 return handled('COMMAND_INVALID','请按截图帮助中的编号发送，如 1、BTC1 或 截图1；单条最多 5 项。')
             deliveries=Deliveries(bridge)
-            if action=='status':return handled('RECORDED_STATUS',deliveries.status(item))
+            if action=='status':
+                text=deliveries.status(item)
+                synced=getattr(self,"catalog_synced",None)
+                if synced:
+                    age=max(0,int(time.time()-synced/1000))
+                    text+="\n目录："+("刚刚同步" if age<30 else "上次同步在 "+str(age)+" 秒前")
+                return handled('RECORDED_STATUS',text)
             if not self.available:return handled('PLUGIN_API_UNAVAILABLE','Hermes 插件接口尚未就绪，未提交截图。')
             if self.closed:return handled('PLUGIN_UNLOADED','插件正在卸载，未提交截图。')
             if self.adapter is None:return handled(self.pending,'尚未绑定本 Profile 的现有微信连接；请确认空闲后重启现有 Gateway 一次。')
@@ -146,7 +161,8 @@ class FastLane:
                 return handled('COMMAND_HELP','正在读取你可用的模板说明；不调用模型、不提交截图。')
             entries=[(item if len(args)==1 else replace(item,message_id='batch:'+hashlib.sha256(item.message_id.encode()).hexdigest()+':'+str(n)),shortcut)
                      for n,shortcut in enumerate(args)]
-            keys=deliveries.claim_many(entries)
+            with admission(Path(self.config_path).parent):
+                keys=deliveries.claim_many(entries)
             for index,(key,(entry,shortcut)) in enumerate(zip(keys,entries)):
                 job={'key':key,'identity':entry,'shortcut':shortcut,'bridge':bridge,'deliveries':deliveries,
                      'adapter':self.adapter,'epoch':self.epoch,'deadline':time.monotonic()+JOB_SECONDS,

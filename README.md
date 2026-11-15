@@ -1,6 +1,6 @@
 # AS-BOT Hermes 插件
 
-给已有官方 Hermes Agent 增加 AS-BOT 截图与经济日历工具。公开仓库为 [xmzzzw/asbot-hermes-plugin](https://github.com/xmzzzw/asbot-hermes-plugin)，插件发行版为 `1.5.1`。这不是 Hermes 的分支、替代客户端或指定版本的 Hermes；安装器不会安装、升级、降级 Hermes，不改变模型、搜索、审批、微信登录或其他插件。`bin/plugin.py` 只是本插件的安装与认证助手；旧入口 `bin/client.py` 保留兼容。
+给已有官方 Hermes Agent 增加 AS-BOT 截图与经济日历工具。公开仓库为 [xmzzzw/asbot-hermes-plugin](https://github.com/xmzzzw/asbot-hermes-plugin)，插件版本以当前安装包的 `release.json` 为准。这不是 Hermes 的分支、替代客户端或指定版本的 Hermes；安装器不会安装、升级、降级 Hermes，不改变模型、搜索、审批、微信登录或其他插件。`bin/plugin.py` 只是本插件的安装与认证助手；旧入口 `bin/client.py` 保留兼容。
 
 固定发行版、完整源 SHA 和校验值都指 **AS-BOT 插件**，用于核对来源与恢复，与你的 Hermes 版本无关。基础接入按官方公开插件接口检测能力，不再比较微信适配器的源码指纹。未来 Hermes 若破坏公开接口仍可能需要插件适配；不能承诺任何未来版本永不受影响。
 
@@ -17,7 +17,7 @@ python3 bin/plugin.py doctor
 
 安装助手自动检测 `HERMES_HOME`，未设置时使用 `~/.hermes`。上述接入码流程只有一个时自动选择，多个时在本机选一个。路径含中文、空格时加引号。
 
-管理员通知可以用 Web 自主管理时，改用 `python3 bin/plugin.py setup --manage`，把 `pairingCode` 填入管理页。网页只显示已配置微信、存在已批准私聊且可新装插件的选项；只有一个时默认勾选，多个可同时勾选。确认后运行 `activate --wait 120`，它会先核对选中的本机绑定。多个配置归在同一台设备下，共享额度，撤销该设备会一起停用。原始微信 ID、登录凭据和本机路径只留在设备上。
+Web 自助开放后，会员和交易员用 `python3 bin/plugin.py setup --manage`，在[接入页](https://asbot-connect.zhouzhou.edu.kg/connect/manage)登录自己的 Discord，填写有效 24 小时的 `pairingCode`。确认后旧码不能再用；未开通时可在原安装目录运行 `status` 换发过期的配对码。网页只显示已配置微信、存在已批准私聊且可新装插件的选项；只有一个时默认勾选，多个可同时勾选。确认后运行 `activate --wait 120`，它会先核对选中的本机绑定。多个配置归在同一台设备下，共享额度，撤销该设备会一起停用。原始微信 ID、登录凭据和本机路径只留在设备上。
 
 接入码只在隐藏终端提示中输入，不放在命令参数、环境变量或日志。直接回车也可先申请、等待管理员审核。会员按管理员要求在 Discord 使用 `/接入确认 配对码`，或运行 `activate --auth web` 登录 Discord。本人身份验证成功仍需管理员批准和资格检查。
 
@@ -39,15 +39,28 @@ python3 bin/plugin.py doctor
 
 ## 升级、恢复与卸载
 
+v1.7.1 修复旧截图任务已经在服务端结束、却仍占住新截图队列的问题。插件只读取原任务状态，确认结束后才放行下一条指令。旧截图不会重新提交，也不会补发；状态仍不明确时，继续按原任务核对。
+
 取得新插件包、独立核对 zip 校验值后，使用原 Hermes Python 和同一状态目录运行：
 
 ```sh
 python3 bin/plugin.py update
-python3 bin/plugin.py uninstall
 ```
+
+原安装使用过 `--state-dir` 时，更新也要带上同一个路径。更新后先在已有微信私聊实测一条截图指令；如果通道没有重连，由设备主人在空闲时重启现有 Gateway。无需重新申请或配对。
 
 只升级本安装回执拥有的插件文件；保留原始备份、账号、额度、图片账本和恢复密钥。发现后续用户改动时停止，不覆盖。旧 `1.0.0` 安装需明确核对传输模式后迁移，不能静默切换功能。凭据轮换用同一状态目录再次运行 `activate`；结果未知时只查询当前凭据版本。
 
 为保留恢复记录，历史状态目录不改名：macOS `~/Library/Application Support/asbot-client`，Linux `${XDG_STATE_HOME:-~/.local/state}/asbot-client`，Windows `%LOCALAPPDATA%\asbot-client`。可用 `--state-dir` 指定独立私密目录，必须在仓库和发行包之外；每个安装实例独立凭据，不要复制给另一设备。POSIX 私有权限或 Windows 当前用户 ACL 无法验证时拒绝继续。Windows 实机资格仍待验。
 
-卸载仅恢复本安装的原配置并移除本插件；服务端撤销由管理员操作。不要发送 `enrollment.json`、`bridge.json` 或私有备份，排查只需申请编号、阶段和错误码。
+需要卸载时，用原状态目录运行 `python3 bin/plugin.py uninstall`。它只恢复本安装的原配置并移除本插件；服务端撤销由管理员操作。不要发送 `enrollment.json`、`bridge.json` 或私有备份，排查只需申请编号、阶段和错误码。
+
+## 管理更新
+
+在 macOS Apple Silicon 和已验证的 Hermes 0.22.2 上，从已独立核对 ZIP 哈希的发行包一次性启用：
+
+1. 对 v1.4.x / v1.5.x，先用新包里的 update 和原状态目录安装受管版本，确认正确的微信配置已实际加载。若热加载未完成，由设备主人按前面的说明安排现有 Gateway 重启。
+2. 从同一个新包运行 python3 bin/plugin.py enable-updates --state-dir <原状态目录>。仅在你同意空闲时重启现有 Gateway 及失败后的恢复重启时加 --restart-gateway。参加获准试用才加 --pilot-updates。
+3. 使用 pause-updates / resume-updates 和原状态目录控制自动安装。已登录管理页的「立即更新」仍可以为自己的设备登记更新；未连接的设备下次联络时处理。
+
+更新器只使用已批准的签名包，并保留原配对、微信登录和历史记录。显示「已恢复旧版」表示实际加载与微信连接都已重新核验；显示需检查 Gateway 时，可先运行 doctor 并查看现有 Gateway，勿创建新接入或重复截图。

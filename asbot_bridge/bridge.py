@@ -34,6 +34,12 @@ class BridgeError(Exception):
         super().__init__(code)
 
 
+def capture_error(operation):
+    error = operation.get("error")
+    code = error.get("code") if isinstance(error, dict) else None
+    return code if isinstance(code, str) and re.fullmatch(r"[A-Z0-9_]{1,80}", code) else "CAPTURE_FAILED"
+
+
 @dataclass(frozen=True)
 class Identity:
     profile: str
@@ -236,7 +242,7 @@ class Transport:
                 except Exception:
                     pass
 
-    def request(self, method, path, token, payload=None, png=False, idempotency_key=None):
+    def request(self, method, path, token, payload=None, png=False, idempotency_key=None, revision=None, timeout=20):
         if (method not in ("GET", "POST") or not path.startswith("/api/v1/")
                 or "?" in path or "#" in path or ".." in path
                 or any(ord(c) < 32 for c in path)):
@@ -249,17 +255,25 @@ class Transport:
             if not isinstance(idempotency_key, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{8,128}", idempotency_key):
                 raise BridgeError("INVALID_IDEMPOTENCY_KEY")
             headers["Idempotency-Key"] = idempotency_key
+        if revision is not None:
+            if path != "/api/v1/catalog" or not re.fullmatch(r"[a-f0-9]{64}", revision):
+                raise BridgeError("INVALID_CATALOG_REVISION")
+            headers["If-None-Match"] = '"' + revision + '"'
         data = None if payload is None else json.dumps(payload, separators=(",", ":")).encode()
         if data is not None:
             headers["Content-Type"] = "application/json"
         with self.lock:
             try:
                 if self.connection is None:
-                    self.connection = http.client.HTTPSConnection(self.hostname, 443, timeout=20, context=self.context)
+                    self.connection = http.client.HTTPSConnection(self.hostname, 443, timeout=timeout, context=self.context)
                 # HTTPSConnection does not use ambient proxy variables or follow redirects.
                 self.connection.request(method, path, body=data, headers=headers)
                 response = self.connection.getresponse()
                 with response:
+                    if response.status == 304 and revision is not None:
+                        if response.headers.get("ETag") != '"'+revision+'"':
+                            raise BridgeError("INVALID_CATALOG_REVISION")
+                        return 304, None
                     if not 200 <= response.status < 300:
                         raise BridgeError("HTTP_" + str(response.status))
                     maximum = MAX_PNG if png else MAX_JSON
@@ -351,9 +365,9 @@ class Ledger:
             db.close()
 
     @contextmanager
-    def call_lock(self, key):
+    def call_lock(self, key, *, create=True):
         path = self.root / (key + ".lock")
-        fd = secure_open(path, os.O_CREAT | os.O_RDWR)
+        fd = secure_open(path, os.O_RDWR | (os.O_CREAT if create else 0))
         try:
             private_file(path)
             try:
@@ -388,6 +402,11 @@ class Ledger:
         with self.connect() as db:
             db.execute("UPDATE requests SET state=?,operation=COALESCE(?,operation),result=? WHERE key=?",
                        (state, operation, json.dumps(result, ensure_ascii=False) if result is not None else None, key))
+
+    def pending_capture(self):
+        with self.connect() as db:
+            return db.execute("SELECT key, operation FROM requests WHERE capability='screenshot.capture' "
+                              "AND state='pending' AND operation IS NOT NULL ORDER BY created,key LIMIT 1").fetchone()
 
     def acquire(self, key, capability):
         with self.connect() as db:
@@ -510,9 +529,47 @@ class Bridge:
             with self.ledger.call_lock(key):
                 return self._invoke(key, identity, principal, capability, normalized)
         finally:
-            close = getattr(self.transport, "close", None)
-            if callable(close):
-                close()
+            self.close_transport()
+
+    def close_transport(self):
+        close = getattr(self.transport, "close", None)
+        if callable(close):
+            close()
+
+    def recover_pending_capture(self, identity, token, timeout):
+        row = self.ledger.pending_capture()
+        if not row:
+            return False
+        key, operation = row
+        if not re.fullmatch(r"[a-f0-9]{64}", key) or not OPERATION.fullmatch(operation):
+            return False
+        try:
+            # A free existing lock rules out a live poller. It does not prove the
+            # server finished; only this installation's exact terminal status does.
+            with self.ledger.call_lock(key, create=False):
+                current = self.ledger.get(key)
+                if current["state"] != "pending" or current["operation"] != operation:
+                    return False
+                self.principal(identity, token)
+                try:
+                    status, body = self.transport.request("GET", "/api/v1/operations/" + operation, token, timeout=timeout)
+                finally:
+                    self.close_transport()  # Later requests use their own normal socket timeout.
+                self.principal(identity, token)
+                if (status != 200 or not isinstance(body, dict) or body.get("id") != operation
+                        or body.get("capabilityId") != "screenshot.capture"):
+                    return False
+                if body.get("state") in ("failed", "cancelled"):
+                    code = capture_error(body)
+                elif body.get("state") == "succeeded":
+                    code = "RESULT_NOT_DELIVERED"
+                else:
+                    return False
+                # Keep the dedup record. Reconciliation never downloads or sends an old PNG.
+                self.ledger.update(key, "failed", result={"ok": False, "error": code})
+                return True
+        except (BridgeError, OSError):
+            return False
 
     def _invoke(self, key, identity, principal, capability, normalized):
         row, fresh = self.ledger.begin(key, capability)
@@ -527,10 +584,21 @@ class Bridge:
             return {"ok": False, "duplicate": True, "state": row["state"],
                     "error": "REQUEST_ALREADY_RECORDED", "message": "请求已记录；执行或发送结果未知时不会自动重放。"}
         deadline = time.monotonic() + self.wait_seconds
+        next_recovery = 0
         while not self.ledger.acquire(key, capability):
-            if time.monotonic() >= deadline:
+            now = time.monotonic()
+            if now >= deadline:
                 self.ledger.update(key, "failed")
                 raise BridgeError("QUEUE_TIMEOUT")
+            if (capability == "screenshot.capture" and self.config.get("external_access") is True
+                    and now >= next_recovery):
+                next_recovery = now + 5
+                recovered = self.recover_pending_capture(identity, principal["bearer_token"], min(3, deadline - now))
+                if time.monotonic() >= deadline:
+                    self.ledger.update(key, "failed")
+                    raise BridgeError("QUEUE_TIMEOUT")
+                if recovered:
+                    continue
             time.sleep(0.25)
         try:
             self.principal(identity, principal["bearer_token"])
@@ -604,9 +672,7 @@ class Bridge:
                 if status != 200 or body.get("id") != operation:
                     raise BridgeError("INVALID_API_RESPONSE")
                 if body.get("state") in ("failed", "cancelled"):
-                    code = (body.get("error") or {}).get("code") if isinstance(body.get("error"), dict) else None
-                    safe_code = code if isinstance(code, str) and re.fullmatch(r"[A-Z0-9_]{1,80}", code) else "CAPTURE_FAILED"
-                    self.ledger.update(key, "failed", result={"ok": False, "error": safe_code})
+                    self.ledger.update(key, "failed", result={"ok": False, "error": capture_error(body)})
                     raise BridgeError("CAPTURE_FAILED")
                 if body.get("state") == "succeeded":
                     if body.get("resultUrl") != path + "/result":
