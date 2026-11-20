@@ -78,12 +78,17 @@ def download(m,target,installer):
             if size>MAX_ZIP or time.monotonic()>deadline:raise ValueError("UPDATE_DOWNLOAD_LIMIT")
             digest.update(chunk);out.write(chunk)
     if digest.hexdigest()!=m["zipSha256"]:raise ValueError("UPDATE_CHECKSUM_INVALID")
+    return unpack(archive,target,installer,m)
+
+
+def unpack(archive,target,installer,m):
     with zipfile.ZipFile(archive) as z:
         names=set();total=0
         for info in z.infolist():
             name=info.filename;parts=name.split("/")
-            if (len(names)>=128 or name in names or len(parts)>2 or
-                    any(not re.fullmatch(r"[A-Za-z0-9._-]{1,80}",p) or p in (".","..") for p in parts)
+            if (len(names)>=128 or name.casefold() in {n.casefold() for n in names} or len(parts)>2 or
+                    any(not re.fullmatch(r"[A-Za-z0-9._-]{1,80}",p) or p.endswith(".") or
+                        re.fullmatch(r"(?i)(con|prn|aux|nul|com[1-9]|lpt[1-9])",p.split(".")[0]) for p in parts)
                     or stat.S_IFMT(info.external_attr>>16) not in (0,stat.S_IFREG)):
                 raise ValueError("UPDATE_ARCHIVE_INVALID")
             total+=info.file_size
@@ -149,7 +154,7 @@ def enable(args,directory,state,installer):
 
 
 class Gateway:
-    def __init__(self,state,client,receipt):
+    def __init__(self,state,client,receipt,*,before_restart=None):
         source=client.hermes_python_source()
         if source is not None and str(source) not in sys.path:sys.path.insert(0,str(source))
         from gateway.control_socket import query_gateway_control
@@ -157,6 +162,7 @@ class Gateway:
         self.source=source
         self.state=state
         self.client=client
+        self.before_restart=before_restart
         self.home=Path(state["hermesRoot"])
         self.profiles={}
         for item in receipt["profiles"]:
@@ -191,6 +197,8 @@ class Gateway:
         status=self.status()
         if not status or any(s.get("gateway_state")!="running" or s.get("active_agents")!=0 or s.get("restart_requested") is not False for s in status.values()):
             return False
+        if bridge is None:
+            return True  # first install has no plugin ledger
         with bridge.ledger.connect() as db:
             if db.execute("SELECT 1 FROM requests WHERE state IN ('queued','submitting','pending','unknown') LIMIT 1").fetchone():return False
             if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='direct_deliveries'").fetchone():
@@ -198,31 +206,65 @@ class Gateway:
         return True
 
     def restart(self,bridge):
-        # Limit the automatic restart to the already managed default Gateway.
-        # Detached/custom/independent secondary launchers require manual recovery.
         statuses=self.status()
         if not self.idle(bridge) or len({s.get("answering_pid") for s in statuses.values()})!=1:return False
-        primary=self.query(self.home,"status",timeout=2)
-        if not primary or any(s.get("answering_pid")!=primary.get("answering_pid") for s in statuses.values()):return False
-        served=primary.get("served_profiles")
-        if not isinstance(served,(dict,list)) or not set(served)<=set(self.profiles):
-            return False
-        pid=primary.get("answering_pid")
+        pid=next(iter(statuses.values())).get("answering_pid")
         if type(pid) is not int or pid<=1:return False
-        label="gui/"+str(os.getuid())+"/ai.hermes.gateway"
+        # The serving process can be a root multiplex Gateway or an independent
+        # profile. Never restart a shared host which serves another profile.
+        for home in dict.fromkeys([*self.profiles.values(),self.home]):
+            identity=self.query(home,"identify",timeout=2) or {}
+            if (identity.get("pid")==pid and identity.get("hermes_home")
+                    and Path(identity["hermes_home"])==home):
+                break
+        else:return False
+        own_profile="default" if home==self.home else home.name
+        served=(self.query(home,"status",timeout=2) or {}).get("served_profiles")
+        if served is None:served=[identity.get("profile")]
+        if not isinstance(served,(dict,list)) or not served or not {own_profile,*served}<=self.profiles.keys():return False
+        if os.name=="nt":
+            return self.windows_restart(home,pid,bridge)
+        if sys.platform not in ("linux","darwin"):return False
+        suffix="" if own_profile=="default" else "-"+own_profile
         def supervised_pid():
-            value=subprocess.run(["/bin/launchctl","print",label],capture_output=True,text=True,timeout=5)
-            found=re.search(r"(?m)^\s*pid = ([0-9]+)\s*$",value.stdout) if value.returncode==0 else None
-            return int(found[1]) if found else None
+            if sys.platform=="darwin":
+                label="gui/"+str(os.getuid())+"/ai.hermes.gateway"+suffix
+                value=subprocess.run(["/bin/launchctl","print",label],capture_output=True,text=True,timeout=5)
+                found=re.search(r"(?m)^\s*pid = ([0-9]+)\s*$",value.stdout) if value.returncode==0 else None
+                return int(found[1]) if found else None
+            value=subprocess.run(["systemctl","--user","show","hermes-gateway"+suffix+".service",
+                                  "--property=MainPID","--value"],capture_output=True,text=True,timeout=5)
+            return int(value.stdout.strip()) if value.returncode==0 and value.stdout.strip().isdigit() else None
         if supervised_pid()!=pid or not self.idle(bridge):return False
-        # Hermes documents SIGUSR1 as the graceful restart request. launchd
-        # remains the existing supervisor; never kickstart, kill or rewrite it.
+        if self.before_restart:self.before_restart()
+        # SIGUSR1 asks Hermes to drain and restart under its existing supervisor.
         os.kill(pid,signal.SIGUSR1)
         deadline=time.monotonic()+40
         while time.monotonic()<deadline:
             next_pid=supervised_pid()
             if next_pid is not None and next_pid!=pid:
                 return True
+            time.sleep(1)
+        return False
+
+    def windows_restart(self,home,pid,bridge):
+        # The native Gateway's login task is the only relaunch path here. A
+        # detached/custom Gateway or unsupported upstream API stays manual.
+        from hermes_cli import gateway_windows as win
+        from gateway.status import get_running_pid
+        if Path(win._hermes_home())!=home or not win.is_task_registered():return False
+        name=win.get_task_name()
+        if win.scheduled_task_drift(name) or get_running_pid(home/"gateway.pid",cleanup_stale=False)!=pid:return False
+        if not self.idle(bridge):return False
+        if self.before_restart:self.before_restart()
+        if not win._drain_gateway_pid(pid,30):return False
+        if get_running_pid(home/"gateway.pid",cleanup_stale=False) or self.query(home,"status",timeout=2):return False
+        started=subprocess.run(["schtasks.exe","/Run","/TN",name],capture_output=True,timeout=10)
+        if started.returncode:return False
+        deadline=time.monotonic()+40
+        while time.monotonic()<deadline:
+            live=(self.query(home,"status",timeout=2) or {}).get("answering_pid")
+            if type(live) is int and live>1 and live!=pid:return True
             time.sleep(1)
         return False
 

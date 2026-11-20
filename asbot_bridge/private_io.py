@@ -87,14 +87,29 @@ def secure_open(path, flags):
         raise
 
 
-def lock_exclusive(fd):
+def lock_file(fd, *, exclusive):
     if os.name == 'nt':
+        import ctypes
+        from ctypes import wintypes
         import msvcrt
-        os.lseek(fd, 0, os.SEEK_SET)
-        try:
-            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
-        except OSError:
-            raise BlockingIOError('LOCK_HELD') from None
+        class Overlapped(ctypes.Structure):
+            _fields_ = [('internal', ctypes.c_size_t), ('internal_high', ctypes.c_size_t),
+                        ('offset', wintypes.DWORD), ('offset_high', wintypes.DWORD), ('event', wintypes.HANDLE)]
+        # Lock byte zero even on an empty file. The kernel releases the shared
+        # or exclusive lock when the owning descriptor/process goes away.
+        lock = ctypes.WinDLL('kernel32', use_last_error=True).LockFileEx
+        lock.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
+                         wintypes.DWORD, ctypes.POINTER(Overlapped)]
+        lock.restype = wintypes.BOOL
+        if not lock(msvcrt.get_osfhandle(fd), 1 | (2 if exclusive else 0), 0, 1, 0, ctypes.byref(Overlapped())):
+            error = ctypes.get_last_error()
+            if error == 33:
+                raise BlockingIOError('LOCK_HELD')
+            raise ctypes.WinError(error)
     else:
         import fcntl
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(fd, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+
+
+def lock_exclusive(fd):
+    lock_file(fd, exclusive=True)

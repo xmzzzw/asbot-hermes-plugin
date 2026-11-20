@@ -34,7 +34,7 @@ installer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(installer)
 CONNECT_ORIGIN = 'https://asbot-connect.zhouzhou.edu.kg'
 BUSINESS_ORIGIN = 'https://asbot.zhouzhou.edu.kg'
-CLIENT_VERSION = '1.7.0'
+CLIENT_VERSION = '1.8.0'
 PAIR_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 STATES = {'awaiting_owner', 'awaiting_identity', 'awaiting_eligibility', 'provisioning',
           'ready', 'active', 'uncertain', 'expired', 'revoked', 'denied'}
@@ -127,7 +127,7 @@ class ConnectTransport:
     """Fixed TLS origin, no ambient proxy, redirects, body logging or write replay."""
     def request(self, method, path, recovery, payload=None):
         if (method not in ('GET', 'POST') or not re.fullmatch(
-                r'/connect/v1/enrollments(?:/[a-f0-9-]{36}(?:/(?:claim|oauth|credentials|ack|proof-code|wechat-check))?)?', path)
+                r'/connect/v1/enrollments(?:/[a-f0-9-]{36}(?:/(?:claim|oauth|credentials|ack|proof-code|wechat-check|assisted))?)?', path)
                 or not re.fullmatch(r'[A-Za-z0-9_-]{43}', recovery)):
             raise ClientError('INVALID_CONNECT_REQUEST')
         body = None if payload is None else json.dumps(payload, separators=(',', ':')).encode()
@@ -205,7 +205,8 @@ with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.St
 print(json.dumps({'compatible': compatible, 'version': version}))
 '''
     try:
-        result = subprocess.run([sys.executable, '-c', probe], cwd=hermes_python_source(), stdout=subprocess.PIPE,
+        result = subprocess.run([sys.executable, '-c', probe], cwd=hermes_python_source(),
+                                env=dict(os.environ,PYTHONDONTWRITEBYTECODE='1'), stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, timeout=20, check=False)
         value = json.loads(result.stdout) if result.returncode == 0 else {}
     except (OSError, subprocess.SubprocessError, ValueError):
@@ -405,6 +406,8 @@ def status(directory, state, transport):
         state['remoteCredentialVersion']=version
     if state['identityVerified'] or time.time()-state.get('browserHandoffCreatedAt',0) >= 600:
         (directory/'browser-handoff.html').unlink(missing_ok=True)
+    if state['identityVerified'] or stage in ('expired','denied','revoked') or time.time()-state.get('localIdentityHelpAt',0)>=600:
+        (directory/'local-identity.html').unlink(missing_ok=True)
     if state.get('proofRefreshPending') and state['identityDeadlineAt'] != state.get('proofRefreshDeadline'):
         state['proofRefreshPending'] = False
     save_state(directory, state)
@@ -422,7 +425,7 @@ def report(state, answer=None):
               'busyCommandLane': 'HERMES_NATIVE_POLICY',
               'repeatedInboundCommands': 'HERMES_NATIVE_POLICY',
               'oldImageRecovery': 'HERMES_NATIVE_POLICY'}
-    if state.get('remoteState') in ('awaiting_owner', 'awaiting_identity') and not state.get('identityVerified'):
+    if 'assisted' not in state and state.get('remoteState') in ('awaiting_owner', 'awaiting_identity') and not state.get('identityVerified'):
         if 'wechatChoices' in state:
             result['pairingCode'] = state['pairingCode']
             result['manageUrl'] = CONNECT_ORIGIN+'/connect/manage'
@@ -585,7 +588,36 @@ def reload_existing_plugins(state):
         return 'PLUGIN_RELOAD_PENDING'
 
 
-def activate(directory, state, transport, *, wait=0, auth='discord'):
+def open_identity_browser(directory,state,transport):
+    """Only a private local file path may enter the browser's argument list."""
+    handoff = directory/'browser-handoff.html'
+    # A lost ticket-creation response cannot be retried until its lifetime
+    # ends. A known local ticket can be opened again without issuing another.
+    if time.time()-state.get('browserHandoffRequestedAt',0)<600:
+        if not handoff.is_file():
+            raise ClientError('OAUTH_HANDOFF_PENDING')
+        secure_file(handoff)
+    else:
+        state['browserHandoffRequestedAt']=time.time()
+        save_state(directory,state)
+        oauth = request(transport, state, '/oauth', 'POST', {})
+        url = oauth.get('url')
+        parsed = urllib.parse.urlsplit(url) if isinstance(url,str) else None
+        if (parsed is None or parsed.scheme!='https' or parsed.netloc!='asbot-connect.zhouzhou.edu.kg'
+                or parsed.username or parsed.password or parsed.fragment or not parsed.path.startswith('/connect/')):
+            raise ClientError('OAUTH_URL_INVALID')
+        target = html.escape(url,quote=True)
+        installer.atomic(handoff, ('<!doctype html><meta charset="utf-8">'
+            '<meta name="referrer" content="no-referrer">'
+            '<meta http-equiv="refresh" content="0;url='+target+'">'
+            '<a href="'+target+'">继续 Discord 身份验证</a>').encode())
+        state['browserHandoffCreatedAt']=time.time()
+        save_state(directory,state)
+    if not webbrowser.open(handoff.as_uri()):
+        raise ClientError('BROWSER_OPEN_FAILED_USE_DISCORD_COMMAND')
+
+
+def activate(directory, state, transport, *, wait=0, auth='discord', package=None, expected_account=None, authorize_mutation=None):
     if state.get('transportMode') != 'official':
         raise ClientError('LEGACY_PLUGIN_MIGRATION_REQUIRED')
     native_compatibility()
@@ -596,7 +628,8 @@ def activate(directory, state, transport, *, wait=0, auth='discord'):
     checked_generation = None
     while True:
         answer = status(directory, state, transport)
-        refresh_proof(directory, state, transport)
+        if authorize_mutation is None:
+            refresh_proof(directory, state, transport)
         stage = state['remoteState']
         if manage and stage in ('awaiting_identity','awaiting_eligibility','provisioning','ready','active'):
             selected = answer.get('wechatSelection')
@@ -615,24 +648,7 @@ def activate(directory, state, transport, *, wait=0, auth='discord'):
             state['selectedWechatIds'] = selected['ids']
             save_state(directory,state)
         if not manage and auth == 'web' and not opened and stage in ('awaiting_owner', 'awaiting_identity') and not state.get('identityVerified'):
-            oauth = request(transport, state, '/oauth', 'POST', {})
-            url = oauth.get('url')
-            parsed = urllib.parse.urlsplit(url) if isinstance(url, str) else None
-            if (parsed is None or parsed.scheme != 'https' or parsed.netloc != 'asbot-connect.zhouzhou.edu.kg'
-                    or parsed.username or parsed.password or parsed.fragment or not parsed.path.startswith('/connect/')):
-                raise ClientError('OAUTH_URL_INVALID')
-            # Give the browser a private local file path. The one-use ticket is
-            # inside that file, never a browser process's command arguments.
-            handoff = directory/'browser-handoff.html'
-            target = html.escape(url, quote=True)
-            installer.atomic(handoff, ('<!doctype html><meta charset="utf-8">'
-                '<meta name="referrer" content="no-referrer">'
-                '<meta http-equiv="refresh" content="0;url='+target+'">'
-                '<a href="'+target+'">继续 Discord 身份验证</a>').encode())
-            state['browserHandoffCreatedAt'] = time.time()
-            save_state(directory,state)
-            if not webbrowser.open(handoff.as_uri()):
-                raise ClientError('BROWSER_OPEN_FAILED_USE_DISCORD_COMMAND')
+            open_identity_browser(directory,state,transport)
             opened = True
         if stage in ('ready','active'):
             break
@@ -643,12 +659,17 @@ def activate(directory, state, transport, *, wait=0, auth='discord'):
         # Each ready generation is read fresh: a cached previous credential
         # bundle must never hide an Owner rotation of this same installation.
         bundle=validate_credentials(request(transport,state,'/credentials'))
+        if expected_account is not None and (bundle['accountId'] != expected_account or
+                answer.get('installationId') != bundle['installationId']):
+            raise ClientError('INSTALLATION_OWNERSHIP_MISMATCH')
         if bundle['credentialVersion']!=state['remoteCredentialVersion']:
             raise ClientError('CREDENTIAL_VERSION_CHANGED_RETRY_STATUS')
         if bundle['credentialVersion']<state.get('credentialVersion',0):
             raise ClientError('CREDENTIAL_VERSION_ROLLBACK_REFUSED')
         if state.get('installed') and bundle['installationId']!=state.get('installationId'):
             raise ClientError('INSTALLATION_OWNERSHIP_MISMATCH')
+        if authorize_mutation is not None:
+            authorize_mutation()
         installer.atomic(directory/'credentials.json',json.dumps(bundle).encode())
         if state.get('installed'):
             installer.rotate_credentials(directory/'install-receipt.json',state['installationId'],bundle)
@@ -677,7 +698,9 @@ def activate(directory, state, transport, *, wait=0, auth='discord'):
         if receipt.exists():
             installer.owned_receipt(receipt, bundle['installationId'])
         else:
-            installer.install(ROOT, Path(state['hermesRoot']), pending, list(dict.fromkeys(t['profile'] for t in targets)), True,
+            if authorize_mutation is not None:
+                authorize_mutation()
+            installer.install(ROOT if package is None else package, Path(state['hermesRoot']), pending, list(dict.fromkeys(t['profile'] for t in targets)), True,
                               installation_id=bundle['installationId'], private_root=directory)
         state['installed'] = True
         save_state(directory, state)
@@ -685,12 +708,16 @@ def activate(directory, state, transport, *, wait=0, auth='discord'):
     if state.get('credentialVersion')!=state.get('remoteCredentialVersion'):
         raise ClientError('LOCAL_CREDENTIAL_GENERATION_MISMATCH_CONTACT_OWNER')
     if state.get('pluginReload')!='RELOADED':
+        if authorize_mutation is not None:
+            authorize_mutation()
         state['pluginReload']=reload_existing_plugins(state)
         save_state(directory,state)
     if state['pluginReload']!='RELOADED':
         return report(state,answer)
     local_doctor(directory, state)  # authenticated /me must pass before acknowledgement
     if stage != 'active' and state.get('ackAttemptedVersion')!=state['credentialVersion']:
+        if authorize_mutation is not None:
+            authorize_mutation()
         config = json.loads((directory/'bridge.json').read_text())
         state['ackAttempted'] = True
         state['ackAttemptedVersion']=state['credentialVersion']
@@ -702,9 +729,17 @@ def activate(directory, state, transport, *, wait=0, auth='discord'):
     return report(state, answer)
 
 
+def helper(name):
+    spec = importlib.util.spec_from_file_location('asbot_' + name.replace('-', '_'), ROOT/'bin'/(name+'.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['setup','activate','status','doctor','update','uninstall','enable-updates','managed-tick','pause-updates','resume-updates'])
+    parser.add_argument('action', choices=['setup','activate','status','doctor','update','uninstall','enable-updates','managed-tick','pause-updates','resume-updates',
+                                           'assist-setup','assist-status','assist-welcome','assist-tick','assist-revoke'])
     parser.add_argument('--state-dir', type=Path, default=default_state_dir())
     parser.add_argument('--hermes-root', type=Path)
     parser.add_argument('--profile')
@@ -715,15 +750,26 @@ def main(argv=None):
     parser.add_argument('--wait', type=int, default=0, help='Bounded activation polling, 0..120 seconds')
     parser.add_argument('--restart-gateway',action='store_true',help='Allow one idle Gateway restart and one recovery restart')
     parser.add_argument('--pilot-updates',action='store_true')
+    parser.add_argument('--allow-maintenance',action='store_true',help='Allow bounded signed plugin maintenance for this device')
+    parser.add_argument('--allow-idle-restart',action='store_true',help='Allow a verified idle restart of the existing selected Gateway')
     args = parser.parse_args(argv)
     try:
         if args.manage and args.action!='setup':
             raise ClientError('WEB_PAIRING_SETUP_ONLY')
         if not 0 <= args.wait <= 120:
             raise ClientError('WAIT_OUT_OF_RANGE')
+        if args.action.startswith('assist-'):
+            result = helper('assisted').run(args,sys.modules[__name__])
+            print(json.dumps(result,ensure_ascii=False))
+            return 0
         directory = private_directory(args.state_dir)
         with state_lock(directory):
             transport = ConnectTransport()
+            current = load_state(directory)
+            if current and 'assisted' in current and args.action not in ('doctor','uninstall'):
+                raise ClientError('USE_ASSISTED_DEVICE_COMMANDS')
+            if current and 'assisted' in current and args.action == 'uninstall' and not current['assisted'].get('withdrawn'):
+                raise ClientError('WITHDRAW_ASSISTANCE_FIRST')
             if args.action == 'setup':
                 result = setup(directory, transport, hermes_root=args.hermes_root,
                                profile=args.profile, peer=args.peer, device_label=args.device_label, manage=args.manage)
@@ -732,8 +778,7 @@ def main(argv=None):
                 if state is None:
                     raise ClientError('SETUP_REQUIRED')
                 if args.action in ('enable-updates','managed-tick','pause-updates','resume-updates'):
-                    update_spec=importlib.util.spec_from_file_location("asbot_managed_update",ROOT/'bin/managed-update.py')
-                    managed=importlib.util.module_from_spec(update_spec);update_spec.loader.exec_module(managed)
+                    managed=helper('managed-update')
                     result=managed.run(args,directory,state,installer,sys.modules[__name__])
                 elif args.action == 'status':
                     answer = status(directory,state,transport)
@@ -764,8 +809,12 @@ def main(argv=None):
         code = getattr(error,'code',None)
         if code is None and type(error) is ValueError and re.fullmatch(r'[A-Z_]+',str(error)):
             code = str(error)
-        print(json.dumps({'stage':'BLOCKED','code':code or 'CLIENT_ACTION_FAILED',
-                          'qualified':False,'recovery':'LOCAL_STATE_RETAINED'}), file=sys.stderr)
+        result={'stage':'BLOCKED','code':code or 'CLIENT_ACTION_FAILED','qualified':False}
+        if args.action.startswith('assist-'):
+            result['stateRetained']=True
+        else:
+            result['recovery']='LOCAL_STATE_RETAINED'
+        print(json.dumps(result),file=sys.stderr)
         return 1
 
 
