@@ -22,6 +22,7 @@ from asbot_bridge.bridge import Bridge, private_file, private_dir
 from asbot_bridge.managed import admission, atomic_json, device, receipt_path, version
 
 REPO="https://github.com/xmzzzw/asbot-hermes-plugin"
+MAX_RELEASE_VALIDITY_MS = 1096 * 86_400_000
 MAX_ZIP=4*1024*1024
 VERSION=r"\d{1,4}\.\d{1,4}\.\d{1,4}"
 HEX=r"[a-f0-9]{64}"
@@ -48,7 +49,7 @@ def manifest(offer,key,current,hermes,pilot,now):
             or m["schema"]!="as-bot.hermes-release/v1" or not re.fullmatch(VERSION,m["version"])
             or not re.fullmatch(r"[a-f0-9]{40}",m["sourceSha"]) or not re.fullmatch(HEX,m["zipSha256"])
             or m["hermesVersion"]!=hermes or m["channel"] not in (("stable","pilot") if pilot else ("stable",))
-            or type(m["expiresAt"]) is not int or not now<m["expiresAt"]<=now+90*86400000
+            or type(m["expiresAt"]) is not int or not now < m["expiresAt"] <= now + MAX_RELEASE_VALIDITY_MS
             or tuple(map(int,m["version"].split(".")))<=tuple(map(int,current.split(".")))):
         raise ValueError("UPDATE_MANIFEST_INVALID")
     return m
