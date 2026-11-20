@@ -6,8 +6,8 @@ import json
 import os
 from pathlib import Path
 import re
-import tempfile
 import time
+import uuid
 
 from .bridge import Bridge, BridgeError, Identity, private_dir
 
@@ -27,7 +27,8 @@ def receipt_path(config,profile):
 
 def atomic_json(path,value):
     private_dir(path.parent)
-    fd,temp=tempfile.mkstemp(prefix=".managed-",dir=path.parent)
+    temp=path.parent/(".managed-"+uuid.uuid4().hex)
+    fd=secure_open(temp,os.O_WRONLY|os.O_CREAT|os.O_EXCL)
     try:
         with os.fdopen(fd,"w") as out:
             json.dump(value,out)
@@ -35,19 +36,15 @@ def atomic_json(path,value):
             os.fsync(out.fileno())
         os.replace(temp,path)
     finally:
-        Path(temp).unlink(missing_ok=True)
+        temp.unlink(missing_ok=True)
 
 
 @contextmanager
 def admission(root, *, exclusive=False):
-    if os.name!="posix":
-        if exclusive:raise BridgeError("UPDATE_LOCK_UNAVAILABLE")
-        yield
-        return
-    import fcntl
+    from .private_io import lock_file
     fd=secure_open(root/"managed-admission.lock",os.O_CREAT|os.O_RDWR)
     try:
-        try:fcntl.flock(fd,(fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)|fcntl.LOCK_NB)
+        try:lock_file(fd,exclusive=exclusive)
         except BlockingIOError:raise BridgeError("UPDATE_IN_PROGRESS") from None
         yield
     finally:

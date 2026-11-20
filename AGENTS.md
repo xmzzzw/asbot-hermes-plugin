@@ -1,6 +1,6 @@
 # 给用户私人 Agent 的操作约束
 
-先读取 [AGENT-INSTALL.md](AGENT-INSTALL.md) 的检测、重复消息处理和验收步骤，再读取 CLIENT-README.md 和可信渠道提供的 clientRelease，核对 zip SHA-256、完整源 SHA 与 release.json 文件校验。只使用 bin/plugin.py 的 setup、activate、status、doctor、update、uninstall 命令。
+先读取 [AGENT-INSTALL.md](AGENT-INSTALL.md) 的检测、重复消息处理和验收步骤，再读取 CLIENT-README.md 和可信渠道提供的 clientRelease，核对 zip SHA-256、完整源 SHA 与 release.json 文件校验。使用 bin/plugin.py 的正式入口。邀请码使用 setup、activate、status、doctor、update、uninstall。设备卡使用 assist-welcome、assist-setup、assist-status、assist-tick、assist-revoke，按设备主人分别授予的首装、长期维护和空闲重启许可执行。
 
 - 使用用户已有 Hermes 与 Python 环境。官方插件接口不可用时报告阻塞；不得静默安装或升级 Hermes、改模型/搜索/审批、重新登录微信、清空状态或启动新 Gateway。
 - 只使用 Hermes 已批准的本地微信私聊。接入码流程有多个时在终端让用户选择。管理员已开放新版 Web 时用 `setup --manage`，由用户在管理页确认一个或多个配置；不得猜测、扩大批准范围或把原始 peer ID 上传服务器。
