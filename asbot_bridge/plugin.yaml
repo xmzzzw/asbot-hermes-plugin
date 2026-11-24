@@ -1,5 +1,5 @@
 name: asbot-bridge
-version: 1.8.1
+version: 1.8.2
 description: AS-BOT zero-model screenshot commands and economic calendar tools using public Hermes plugin APIs
 provides_tools:
   - asbot_screenshot_capture
