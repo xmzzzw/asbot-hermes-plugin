@@ -11,6 +11,9 @@ import uuid
 
 from .bridge import Bridge, BridgeError, Identity, private_dir
 
+CATALOG_REFRESH_SECONDS = 24 * 60 * 60
+READINESS_HEARTBEAT_SECONDS = 20
+
 
 def version(root):
     found=re.search(r"(?m)^version: (\d{1,4}\.\d{1,4}\.\d{1,4})$", (root/"plugin.yaml").read_text())
@@ -76,6 +79,7 @@ async def monitor(lane):
     observed_version=version(Path(__file__).parent)
     path=receipt_path(lane.config_path,lane.profile)
     revision=synced=None
+    next_refresh=0
 
     def refresh():
         bridge=Bridge.from_file(lane.config_path)
@@ -85,27 +89,33 @@ async def monitor(lane):
             bridge.transport.close()
 
     while not lane.closed:
-        try:
-            status,data=await asyncio.to_thread(refresh)
-            if status==200:
-                if data.get("schema")!="as-bot.external-catalog/v1" or not re.fullmatch(r"[a-f0-9]{64}",data.get("revision","")):
-                    raise BridgeError("INVALID_CATALOG")
-                revision=data["revision"]
-                lane.catalog=data
-            synced=int(time.time()*1000)
-            lane.catalog_synced=synced
-        except BridgeError as e:
-            if e.code in ("HTTP_401","HTTP_403"):
-                revision=synced=None
-                lane.catalog=None
-                lane.catalog_synced=None
-        except Exception:
-            pass
+        # Directory metadata is informational; capture/help still use current
+        # server authorization. Keep readiness local and frequent, without a
+        # catalog HTTP request on every heartbeat (including after errors).
+        if time.monotonic() >= next_refresh:
+            next_refresh=time.monotonic()+CATALOG_REFRESH_SECONDS
+            try:
+                status,data=await asyncio.to_thread(refresh)
+                if status==200:
+                    if data.get("schema")!="as-bot.external-catalog/v1" or not re.fullmatch(r"[a-f0-9]{64}",data.get("revision","")):
+                        raise BridgeError("INVALID_CATALOG")
+                    revision=data["revision"]
+                    lane.catalog=data
+                synced=int(time.time()*1000)
+                lane.catalog_synced=synced
+            except BridgeError as e:
+                if e.code in ("HTTP_401","HTTP_403"):
+                    revision=synced=None
+                    lane.catalog=None
+                    lane.catalog_synced=None
+            except Exception:
+                pass
         if not lane.closed:
             try:
                 atomic_json(path,{"version":observed_version,"pid":os.getpid(),"checked":time.time(),
                     "connected":bool(lane.adapter and lane.adapter.is_connected),"busy":bool(lane.jobs),
-                    "catalogRevision":revision,"syncedAt":synced})
+                    "catalogRevision":revision,"syncedAt":synced,
+                    "catalogRefreshSeconds":CATALOG_REFRESH_SECONDS})
             except (OSError,ValueError):
                 pass
-        await asyncio.sleep(20)
+        await asyncio.sleep(READINESS_HEARTBEAT_SECONDS)
